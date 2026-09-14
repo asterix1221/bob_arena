@@ -1,0 +1,5 @@
+*.o
+*.exe
+*.out
+server_app
+client_app

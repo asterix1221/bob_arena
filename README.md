@@ -125,3 +125,163 @@ git push -u origin feature/udp-echo
 Обе реализуют поверх UDP надёжные и ненадёжные каналы, что удобно для
 файтинга: позиции/удары — по ненадёжному каналу с высокой частотой,
 критичные события (смерть, подбор руны) — по надёжному.
+
+---
+
+# Практическая работа №2 — телеметрия UDP-соединения (RTT/SRTT/джиттер/потери)
+
+Продолжает ПР №1: добавлена ИЗОЛИРОВАННАЯ подсистема телеметрии — свои
+PING/PONG-пакеты, свой протокол (не путать с `common/protocol.h` из ПР №1),
+свой порт (`27016` вместо `27015`), измеряющая RTT, сглаженный RTT (SRTT),
+джиттер и долю потерь на UDP-соединении. Она понадобится в ПР №3 при
+реализации ACK/тайм-аутов/повторных передач. Причины держать её отдельно
+от игрового протокола ПР №1 подробно объяснены в комментарии к
+`telemetry/protocol.h` и в приложении к `docs/Protocol_Specification.md`.
+
+## Что добавлено (структура)
+
+```
+bob_arena/
+├── telemetry/                      — НОВОЕ: изолированная подсистема телеметрии
+│   ├── protocol.h / protocol.cpp   — контракт PING/PONG, явная сериализация
+│   │                                  (WriteU16/WriteU64/ReadU16/ReadU64,
+│   │                                  сетевой порядок байт, БЕЗ memcpy structs)
+│   ├── telemetry.h / telemetry.cpp — RTT/SRTT/джиттер, inFlight-контейнер,
+│   │                                  классификация ответов, ComputeSeriesStats
+│   │                                  для офлайн-статистики по CSV
+│   └── transport.h / transport.cpp — тонкая обёртка UDP-сокета (только
+│                                       сетевой ввод-вывод, без знания о
+│                                       формате пакетов и метриках)
+├── client/ping_client.cpp          — НОВОЕ: UDP-клиент серии PING
+├── server/pong_server.cpp          — НОВОЕ: UDP-сервер PONG с флагами
+│                                       эмуляции задержки/джиттера/потерь
+├── tests/
+│   ├── mini_test.h                 — крошечный header-only test-harness
+│   │                                  (без внешних зависимостей, как и ПР №1)
+│   ├── test_protocol.cpp           — сериализация PING/PONG + отбраковка
+│   │                                  некорректных датаграмм (13 тестов)
+│   ├── test_telemetry.cpp          — RTT/SRTT/джиттер/статусы/статистика
+│   │                                  (10 тестов)
+│   └── test_main.cpp               — точка входа тестового бинарника
+├── analysis/analyze_latency.py     — считает статистику по CSV и строит
+│                                       3 обязательных графика (Python/matplotlib)
+├── run_experiments.sh              — прогоняет все 6 серий эксперимента подряд
+└── docs/
+    ├── Protocol_Specification.md   — дополнен приложением про PING/PONG
+    ├── Experiment_Config.md        — НОВОЕ: параметры/среда/seed'ы эксперимента
+    ├── Latency_Report.md           — НОВОЕ: таблица метрик + 3 графика + разбор
+    ├── latency_samples.csv         — НОВОЕ: журнал измерений (реальный прогон)
+    └── graphs/                     — НОВОЕ: latency_by_measurement.png,
+                                        mean_rtt_srtt_loss.png, rtt_distribution.png
+```
+
+## Что реализовано
+
+- [x] Контракт пакетов PING (клиент→сервер) / PONG (сервер→клиент): версия
+      протокола, порядковый номер, размер payload — заголовок 7 байт
+- [x] Явная сериализация в сетевом порядке байт (`WriteU16/WriteU64/
+      ReadU16/ReadU64`), без побайтового копирования структур
+- [x] Валидация ДО чтения: длина заголовка, `packetType`, версия,
+      совпадение `payloadSize` с длиной датаграммы, границы буфера —
+      некорректная датаграмма отбрасывается без падения процесса, с логом
+- [x] Три раздельных модуля `protocol` / `telemetry` / `transport`,
+      не смешивающих сетевой ввод, сериализацию и расчёт метрик
+- [x] RTT по монотонным часам клиента (`std::chrono::steady_clock`),
+      SRTT по формуле `0.875·SRTT + 0.125·RTT`, ограниченный (bounded)
+      контейнер `inFlight`
+- [x] Статусы `received` / `timeout` / `late_response` /
+      `duplicate_response` / `unknown_response`
+- [x] CSV-журнал `docs/latency_samples.csv` в формате из задания
+- [x] Автотесты сериализации, ошибочных пакетов и статистики
+      (23 теста, все проходят — см. «Как собрать и прогнать» ниже)
+- [x] `docs/Experiment_Config.md` и `docs/Latency_Report.md` с тремя графиками
+- [x] Реальный (не смоделированный вручную) прогон всех 6 серий: `baseline`,
+      `delay_50`, `delay_100`, `jitter`, `loss_5`, `combined` — по 60 PING
+      каждая (минимум по заданию — 50), интервал 300 мс
+- [x] Эмуляция задержки/джиттера/потерь встроена в `pong_server_app`
+      (флаги `--delay-ms`/`--jitter-min-ms`/`--jitter-max-ms`/
+      `--loss-percent`/`--seed`) — явно задокументировано в
+      `docs/Experiment_Config.md`, почему не использован Clumsy
+      (инструмент только под Windows, недоступен в среде сборки/проверки)
+- [ ] Ветка `feature/latency-measurement`, issues, Pull Request, ревью —
+      подготовлены ЛОКАЛЬНО (см. раздел «Git-workflow» ниже), но не
+      запушены в GitHub/GitVerse — для этого нужны ваши учётные данные,
+      см. инструкцию ниже
+
+## Сборка и запуск
+
+```
+g++ -std=c++17 -O2 telemetry/protocol.cpp telemetry/telemetry.cpp telemetry/transport.cpp \
+    client/ping_client.cpp -o ping_client_app
+g++ -std=c++17 -O2 telemetry/protocol.cpp telemetry/transport.cpp \
+    server/pong_server.cpp -o pong_server_app
+```
+
+На Windows (MinGW) добавить `-lws2_32`, как и для ПР №1; для MSVC —
+аналогично `cl`-командам ПР №1 из раздела выше (только с файлами из
+`telemetry/`, `client/ping_client.cpp`, `server/pong_server.cpp` вместо
+`common/protocol.cpp`, `server/server.cpp`, `client/client.cpp`).
+
+**Одна серия вручную** (два окна терминала):
+```
+.\pong_server_app.exe 27016 --delay-ms=50
+.\ping_client_app.exe 127.0.0.1 27016 delay_50 60 300 docs\latency_samples.csv
+```
+
+**Все 6 серий сразу** (Linux/macOS/Git Bash/WSL — на голом Windows cmd/PowerShell
+без bash запускайте серии вручную по одной, как показано выше, с флагами
+из таблицы в `docs/Experiment_Config.md`):
+```
+CLIENT=./ping_client_app SERVER=./pong_server_app ./run_experiments.sh
+python3 analysis/analyze_latency.py
+```
+
+**Тесты:**
+```
+g++ -std=c++17 telemetry/protocol.cpp telemetry/telemetry.cpp \
+    tests/test_protocol.cpp tests/test_telemetry.cpp tests/test_main.cpp -o telemetry_tests
+.\telemetry_tests.exe
+```
+Ожидаемый результат: `23 тестов, 0 провалено`.
+
+## Git-workflow (ветка/issues/PR)
+
+В этой среде нет доступа к вашему GitHub-аккаунту, поэтому issues и Pull
+Request нельзя создать программно — они требуют ваших учётных данных
+через веб-интерфейс или `gh`/API с токеном. Вместо этого здесь ЛОКАЛЬНО
+подготовлено то, что можно сделать без сетевого доступа к GitHub:
+
+- ветка `feature/latency-measurement`, ответвлённая от `main`;
+- история коммитов на этой ветке, повторяющая этапы из таблицы
+  «План выполнения» задания (проектирование → реализация →
+  базовый тест → конфигурация → эксперимент → анализ/отчёт).
+
+Чтобы опубликовать и довести до Pull Request, после `git push`:
+
+```
+git push -u origin feature/latency-measurement
+```
+
+1. Создайте на GitHub/GitVerse issues по числу этапов (например:
+   «Контракт протокола PING/PONG», «Модуль telemetry: RTT/SRTT/джиттер»,
+   «CSV-журнал и базовый baseline-тест», «Experiment_Config.md»,
+   «Прогон 6 серий эксперимента», «Latency_Report.md + графики») и
+   свяжите с ними соответствующие коммиты (`Fixes #N` в сообщении коммита
+   при последующих правках, если понадобятся).
+2. Откройте Pull Request `feature/latency-measurement` → `main`, в
+   описание можно скопировать раздел «Что реализовано» выше.
+3. Попросите участника команды сделать ревью (по заданию — обязательный
+   пункт) и по его комментариям при необходимости дополните ветку.
+
+## Известные ограничения / что не проверялось "физически"
+
+- Эксперимент прогнан по локальной петле (`127.0.0.1`) в Linux-песочнице,
+  а не на двух отдельных машинах в реальной сети — искусственные
+  задержка/джиттер/потери эмулированы сервером (см. `Experiment_Config.md`
+  и обоснование там же); формулы и код от этого не зависят и одинаково
+  работают что на loopback, что в реальной сети, что на Windows 11.
+- Статусы `late_response`/`duplicate_response`/`unknown_response`
+  не встретились в реальном прогоне (максимальная искусственная задержка
+  250 мс с большим запасом меньше тайм-аута 1000 мс) — они покрыты
+  модульными тестами (`tests/test_telemetry.cpp`), подробности — в
+  `docs/Latency_Report.md`, раздел «Почему не наблюдались...».

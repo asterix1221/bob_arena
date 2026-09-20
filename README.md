@@ -34,6 +34,7 @@ pract1/
 - [x] Доп. задание: простая авторизация по логину/паролю
 - [x] Архитектурная документация (`docs/Architecture_Design.md`)
 - [x] Спецификация протокола (`docs/Protocol_Specification.md`)
+- [x] Механики (`docs/mechanics.md`)
 
 ## Сборка и запуск на Windows 11
 
@@ -103,7 +104,7 @@ Consolas) в свойствах окна или запускайте через
 опубликовать в GitVerse:
 
 ```
-git remote add origin <ссылка-на-ваш-репозиторий-GitVerse>
+git remote add origin https://github.com/asterix1221/bob_arena
 git branch -M main
 git push -u origin main
 git push -u origin feature/udp-echo

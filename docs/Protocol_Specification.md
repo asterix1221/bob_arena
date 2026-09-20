@@ -105,10 +105,10 @@ player2 / pass2
 Отдельный, НЕсовместимый с описанным выше протокол — своя пара
 клиент/сервер (`client/ping_client.cpp` / `server/pong_server.cpp`),
 свой порт по умолчанию (`27016` вместо `27015`), модули
-`telemetry/protocol.{h,cpp}`, `telemetry/telemetry.{h,cpp}`,
+`protocol/protocol.{h,cpp}`, `telemetry/telemetry.{h,cpp}`,
 `telemetry/transport.{h,cpp}`. Причины изолировать, а не расширить
 протокол выше, подробно разобраны в комментарии к
-`telemetry/protocol.h`; кратко: другой состав заголовка (нет `checksum`,
+`protocol/protocol.h`; кратко: другой состав заголовка (нет `checksum`,
 есть `protocolVersion`), другая (явная, не побайтовая) сериализация, и
 явное указание задания рассматривать телеметрию как "изолированную
 подсистему" до её интеграции с ACK/тайм-аутами/повторной передачей в ПР №3.

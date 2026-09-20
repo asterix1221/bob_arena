@@ -2,7 +2,7 @@
 // Тесты сериализации PING/PONG и отбраковки некорректных датаграмм
 // (см. задание: "автоматические тесты сериализации... и ошибочных пакетов").
 #include "mini_test.h"
-#include "../telemetry/protocol.h"
+#include "../protocol/protocol.h"
 
 using namespace telemetry;
 

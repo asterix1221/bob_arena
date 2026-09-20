@@ -136,16 +136,17 @@ PING/PONG-пакеты, свой протокол (не путать с `common/
 джиттер и долю потерь на UDP-соединении. Она понадобится в ПР №3 при
 реализации ACK/тайм-аутов/повторных передач. Причины держать её отдельно
 от игрового протокола ПР №1 подробно объяснены в комментарии к
-`telemetry/protocol.h` и в приложении к `docs/Protocol_Specification.md`.
+`protocol/protocol.h` и в приложении к `docs/Protocol_Specification.md`.
 
 ## Что добавлено (структура)
 
 ```
 bob_arena/
-├── telemetry/                      — НОВОЕ: изолированная подсистема телеметрии
-│   ├── protocol.h / protocol.cpp   — контракт PING/PONG, явная сериализация
-│   │                                  (WriteU16/WriteU64/ReadU16/ReadU64,
-│   │                                  сетевой порядок байт, БЕЗ memcpy structs)
+├── protocol/                       — НОВОЕ: контракт протокола телеметрии
+│   └── protocol.h / protocol.cpp   — PING/PONG, явная сериализация
+│                                      (WriteU16/WriteU64/ReadU16/ReadU64,
+│                                      сетевой порядок байт, БЕЗ memcpy structs)
+├── telemetry/                      — НОВОЕ: расчёт метрик телеметрии
 │   ├── telemetry.h / telemetry.cpp — RTT/SRTT/джиттер, inFlight-контейнер,
 │   │                                  классификация ответов, ComputeSeriesStats
 │   │                                  для офлайн-статистики по CSV
@@ -211,9 +212,9 @@ bob_arena/
 ## Сборка и запуск
 
 ```
-g++ -std=c++17 -O2 telemetry/protocol.cpp telemetry/telemetry.cpp telemetry/transport.cpp \
+g++ -std=c++17 -O2 protocol/protocol.cpp telemetry/telemetry.cpp telemetry/transport.cpp \
     client/ping_client.cpp -o ping_client_app
-g++ -std=c++17 -O2 telemetry/protocol.cpp telemetry/transport.cpp \
+g++ -std=c++17 -O2 protocol/protocol.cpp telemetry/transport.cpp \
     server/pong_server.cpp -o pong_server_app
 ```
 
@@ -238,7 +239,7 @@ python3 analysis/analyze_latency.py
 
 **Тесты:**
 ```
-g++ -std=c++17 telemetry/protocol.cpp telemetry/telemetry.cpp \
+g++ -std=c++17 protocol/protocol.cpp telemetry/telemetry.cpp \
     tests/test_protocol.cpp tests/test_telemetry.cpp tests/test_main.cpp -o telemetry_tests
 .\telemetry_tests.exe
 ```

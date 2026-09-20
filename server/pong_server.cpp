@@ -11,7 +11,7 @@
 //   pong_server_app [port=27016] [--delay-ms=N] [--jitter-min-ms=N]
 //                    [--jitter-max-ms=N] [--loss-percent=N] [--seed=N]
 
-#include "../telemetry/protocol.h"
+#include "../protocol/protocol.h"
 #include "../telemetry/transport.h"
 
 #include <algorithm>

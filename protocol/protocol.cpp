@@ -1,4 +1,4 @@
-// telemetry/protocol.cpp
+// protocol/protocol.cpp
 #include "protocol.h"
 
 namespace telemetry {

@@ -70,9 +70,9 @@ PONG, а потери — просто не отвечая на часть PING.
 ## Как повторить эксперимент
 
 ```bash
-g++ -std=c++17 -O2 telemetry/protocol.cpp telemetry/telemetry.cpp telemetry/transport.cpp \
+g++ -std=c++17 -O2 protocol/protocol.cpp telemetry/telemetry.cpp telemetry/transport.cpp \
     client/ping_client.cpp -o ping_client_app
-g++ -std=c++17 -O2 telemetry/protocol.cpp telemetry/transport.cpp \
+g++ -std=c++17 -O2 protocol/protocol.cpp telemetry/transport.cpp \
     server/pong_server.cpp -o pong_server_app
 
 ./run_experiments.sh          # прогоняет все 6 серий, пишет docs/latency_samples.csv

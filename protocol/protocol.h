@@ -1,4 +1,4 @@
-// telemetry/protocol.h
+// protocol/protocol.h
 //
 // Контракт протокола телеметрии (ПР №2): изолированная подсистема,
 // НЕ переиспользующая PacketHeader/enum PacketType из common/protocol.h.

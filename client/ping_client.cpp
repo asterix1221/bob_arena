@@ -9,9 +9,9 @@
 // По умолчанию: 127.0.0.1 27016 baseline 50 300 docs/latency_samples.csv
 //
 // ВАЖНО: это ОТДЕЛЬНЫЙ порт/протокол от игрового клиента ПР №1
-// (client/client.cpp, порт 27015) — см. обоснование в telemetry/protocol.h.
+// (client/client.cpp, порт 27015) — см. обоснование в protocol/protocol.h.
 
-#include "../telemetry/protocol.h"
+#include "../protocol/protocol.h"
 #include "../telemetry/telemetry.h"
 #include "../telemetry/transport.h"
 

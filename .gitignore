@@ -3,3 +3,7 @@
 *.out
 server_app
 client_app
+ping_client_app
+pong_server_app
+telemetry_tests
+docs/server_*.log

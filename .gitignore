@@ -1,6 +1,7 @@
 *.o
 *.exe
 *.out
+*.pdf
 server_app
 client_app
 ping_client_app

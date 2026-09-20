@@ -24,9 +24,9 @@ import sys
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-
 
 SERIES_ORDER = ["baseline", "delay_50", "delay_100", "jitter", "loss_5", "combined"]
 

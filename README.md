@@ -286,3 +286,32 @@ git push -u origin feature/latency-measurement
   250 мс с большим запасом меньше тайм-аута 1000 мс) — они покрыты
   модульными тестами (`tests/test_telemetry.cpp`), подробности — в
   `docs/Latency_Report.md`, раздел «Почему не наблюдались...».
+
+## Если IDE подсвечивает `std::optional`/`std::nullopt` как ошибку
+
+Реальная сборка (`g++ -std=c++17 ...` / `cl /std:c++17 ...`, как показано
+выше) от этой проблемы не страдает — она проверена и в g++, и в clang
+(в т.ч. принудительно с флагом `-std=c++17`). Если редактор (VS Code,
+CLion и т.п.) всё равно подчёркивает `std::optional`/`std::nullopt`
+красным с сообщением вида *"no template named 'optional' in namespace
+'std'"*, это ложное срабатывание анализатора кода (IntelliSense/clangd),
+который без явной настройки проекта иногда разбирает файлы со старым
+стандартом (C++14) вместо C++17, где `<optional>` ещё не существовал —
+воспроизведено и подтверждено принудительным запуском с `-std=gnu++14`.
+
+Чтобы редактор тоже узнал про C++17, в репозиторий добавлены:
+- `compile_flags.txt` (корень репозитория) — читается `clangd` (расширение
+  clangd для VS Code, CLion, Neovim/Vim с LSP, Sublime) автоматически,
+  без дополнительной настройки.
+- `.vscode/c_cpp_properties.json` — для официального расширения
+  Microsoft C/C++ (IntelliSense) в VS Code, `"cppStandard": "c++17"`
+  для конфигураций Win32 и Linux.
+
+После добавления этих файлов красные подчёркивания должны исчезнуть
+(в VS Code иногда требуется "C/C++: Reset IntelliSense Database" из
+палитры команд или перезапуск редактора). Заодно в `common/net_common.h`
+добавлено `#define _CRT_SECURE_NO_WARNINGS` для Windows — это убирает
+настоящее (не только IDE) предупреждение MSVC про `fopen` в
+`client/ping_client.cpp` ("consider using fopen_s instead"): `fopen` тут
+использован намеренно ради переносимости между Windows и Linux, `fopen_s`
+такой возможности не даёт.

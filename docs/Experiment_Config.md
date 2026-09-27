@@ -69,18 +69,24 @@ PONG, а потери — просто не отвечая на часть PING.
 
 ## Как повторить эксперимент
 
+**Linux/macOS/Git Bash/WSL:**
 ```bash
-g++ -std=c++17 -O2 protocol/protocol.cpp telemetry/telemetry.cpp telemetry/transport.cpp \
-    client/ping_client.cpp -o ping_client_app
-g++ -std=c++17 -O2 protocol/protocol.cpp telemetry/transport.cpp \
-    server/pong_server.cpp -o pong_server_app
+g++ -std=c++17 -O2 protocol/protocol.cpp telemetry/telemetry.cpp telemetry/transport.cpp client/ping_client.cpp -o ping_client_app
+g++ -std=c++17 -O2 protocol/protocol.cpp telemetry/transport.cpp server/pong_server.cpp -o pong_server_app
 
 ./run_experiments.sh          # прогоняет все 6 серий, пишет docs/latency_samples.csv
 python3 analysis/analyze_latency.py   # печатает таблицу, строит docs/graphs/*.png
 ```
 
-На Windows 11 (PowerShell/cmd, MinGW или MSVC) — те же команды со сборкой,
-как в README (`g++ ... -lws2_32` или `cl ...`), и `run_experiments.sh`
-заменяется ручным запуском `pong_server_app`/`ping_client_app` в двух
-окнах терминала для каждой серии по очереди (сам скрипт — bash, для
-Windows его можно прогнать через Git Bash/WSL без изменений).
+**Windows 11, PowerShell (нативно, без Git Bash/WSL):**
+```powershell
+g++ -std=c++17 -O2 protocol/protocol.cpp telemetry/telemetry.cpp telemetry/transport.cpp client/ping_client.cpp -o ping_client_app.exe -lws2_32
+g++ -std=c++17 -O2 protocol/protocol.cpp telemetry/transport.cpp server/pong_server.cpp -o pong_server_app.exe -lws2_32
+
+.\run_experiments.ps1
+python analysis/analyze_latency.py
+```
+(команды однострочные и с `-lws2_32` намеренно — см. README.md, раздел
+«Баги, обнаруженные в процессе разработки», про перенос строк `\` в
+PowerShell и обязательность `-lws2_32` для MinGW.)
+

@@ -166,7 +166,8 @@ bob_arena/
 │   └── test_main.cpp               — точка входа тестового бинарника
 ├── analysis/analyze_latency.py     — считает статистику по CSV и строит
 │                                       3 обязательных графика (Python/matplotlib)
-├── run_experiments.sh              — прогоняет все 6 серий эксперимента подряд
+├── run_experiments.sh              — прогоняет все 6 серий эксперимента подряд (bash)
+├── run_experiments.ps1             — то же самое нативным PowerShell (без Git Bash/WSL)
 └── docs/
     ├── Protocol_Specification.md   — дополнен приложением про PING/PONG
     ├── Experiment_Config.md        — НОВОЕ: параметры/среда/seed'ы эксперимента
@@ -211,38 +212,67 @@ bob_arena/
 
 ## Сборка и запуск
 
+> **Важно про перенос строк в командах:** символ `\` в конце строки
+> означает «продолжение команды на следующей строке» только в
+> bash/sh/zsh (Linux/macOS/Git Bash/WSL). В PowerShell это НЕ работает —
+> там для переноса нужен обратный апостроф `` ` ``, а в cmd.exe — `^`.
+> Если скопировать bash-многострочную команду в обычный PowerShell,
+> `\` попадёт в команду как обычный (лишний) аргумент, и g++/clang
+> передаст его линкеру как «файл», которого не существует — отсюда
+> ошибка вида `ld.exe: cannot find \: No such file or directory`
+> (подробности и разбор — в разделе «Баги, обнаруженные в процессе
+> разработки» в конце README). Поэтому ниже все команды даны в ОДНУ
+> строку — их можно копировать в PowerShell как есть.
+
+**PowerShell / cmd.exe (Windows, MinGW из MSYS2 — как в разделе ПР №1):**
 ```
-g++ -std=c++17 -O2 protocol/protocol.cpp telemetry/telemetry.cpp telemetry/transport.cpp \
-    client/ping_client.cpp -o ping_client_app
-g++ -std=c++17 -O2 protocol/protocol.cpp telemetry/transport.cpp \
-    server/pong_server.cpp -o pong_server_app
+g++ -std=c++17 -O2 protocol/protocol.cpp telemetry/telemetry.cpp telemetry/transport.cpp client/ping_client.cpp -o ping_client_app.exe -lws2_32
+g++ -std=c++17 -O2 protocol/protocol.cpp telemetry/transport.cpp server/pong_server.cpp -o pong_server_app.exe -lws2_32
+```
+`-lws2_32` обязателен для MinGW (тот же нюанс, что и в ПР №1: MinGW/GCC
+не обрабатывает `#pragma comment(lib, ...)` — это расширение только
+MSVC, — поэтому без явного флага будет `undefined reference to
+WSAStartup` при линковке).
+
+**Developer Command Prompt for VS (MSVC):**
+```
+cl /std:c++17 /EHsc protocol/protocol.cpp telemetry/telemetry.cpp telemetry/transport.cpp client/ping_client.cpp /Fe:ping_client_app.exe ws2_32.lib
+cl /std:c++17 /EHsc protocol/protocol.cpp telemetry/transport.cpp server/pong_server.cpp /Fe:pong_server_app.exe ws2_32.lib
 ```
 
-На Windows (MinGW) добавить `-lws2_32`, как и для ПР №1; для MSVC —
-аналогично `cl`-командам ПР №1 из раздела выше (только с файлами из
-`telemetry/`, `client/ping_client.cpp`, `server/pong_server.cpp` вместо
-`common/protocol.cpp`, `server/server.cpp`, `client/client.cpp`).
+**Linux/macOS/Git Bash/WSL (bash):**
+```bash
+g++ -std=c++17 -O2 protocol/protocol.cpp telemetry/telemetry.cpp telemetry/transport.cpp client/ping_client.cpp -o ping_client_app
+g++ -std=c++17 -O2 protocol/protocol.cpp telemetry/transport.cpp server/pong_server.cpp -o pong_server_app
+```
+(`-lws2_32` здесь не нужен — это чисто Windows-библиотека.)
 
-**Одна серия вручную** (два окна терминала):
+**Одна серия вручную** (два окна терминала; путь к `.exe` в PowerShell —
+через `.\`, в cmd.exe можно и без):
 ```
 .\pong_server_app.exe 27016 --delay-ms=50
-.\ping_client_app.exe 127.0.0.1 27016 delay_50 60 300 docs\latency_samples.csv
+.\ping_client_app.exe 127.0.0.1 27016 delay_50 60 300 docs/latency_samples.csv
 ```
 
-**Все 6 серий сразу** (Linux/macOS/Git Bash/WSL — на голом Windows cmd/PowerShell
-без bash запускайте серии вручную по одной, как показано выше, с флагами
-из таблицы в `docs/Experiment_Config.md`):
-```
-CLIENT=./ping_client_app SERVER=./pong_server_app ./run_experiments.sh
-python3 analysis/analyze_latency.py
-```
+**Все 6 серий сразу:**
+- Linux/macOS/Git Bash/WSL — `run_experiments.sh` (bash):
+  ```bash
+  CLIENT=./ping_client_app SERVER=./pong_server_app ./run_experiments.sh
+  python3 analysis/analyze_latency.py
+  ```
+- Нативный Windows PowerShell (без bash) — `run_experiments.ps1`,
+  делает то же самое средствами PowerShell:
+  ```powershell
+  .\run_experiments.ps1
+  python analysis/analyze_latency.py
+  ```
 
 **Тесты:**
 ```
-g++ -std=c++17 protocol/protocol.cpp telemetry/telemetry.cpp \
-    tests/test_protocol.cpp tests/test_telemetry.cpp tests/test_main.cpp -o telemetry_tests
+g++ -std=c++17 protocol/protocol.cpp telemetry/telemetry.cpp tests/test_protocol.cpp tests/test_telemetry.cpp tests/test_main.cpp -o telemetry_tests.exe
 .\telemetry_tests.exe
 ```
+(на Linux/macOS/Git Bash — то же самое, но без `.exe` и запуск через `./telemetry_tests`.)
 Ожидаемый результат: `23 тестов, 0 провалено`.
 
 ## Git-workflow (ветка/issues/PR)
@@ -315,3 +345,82 @@ CLion и т.п.) всё равно подчёркивает `std::optional`/`std
 `client/ping_client.cpp` ("consider using fopen_s instead"): `fopen` тут
 использован намеренно ради переносимости между Windows и Linux, `fopen_s`
 такой возможности не даёт.
+
+## Баги, обнаруженные в процессе разработки
+
+Раздел для проблем, которые реально возникли при работе над проектом
+(в основном — на моей Windows 11 при первой попытке собрать и запустить
+ПР №2), вместе с тем, как они были найдены и исправлены.
+
+### 1. `ld.exe: cannot find \: No such file or directory` при сборке в PowerShell
+
+**Симптом:** копирование команды сборки из README в PowerShell 7
+(`g++ ... \` + перенос на следующую строку) падало с ошибкой линковки
+про несуществующий файл `\`, и то же самое для `pong_server_app`.
+
+**Причина:** символ `\` в конце строки — это line-continuation ТОЛЬКО
+для bash/sh/zsh. В PowerShell (и в cmd.exe) `\` не имеет такого смысла:
+это либо обычный разделитель пути, либо просто символ. Когда команда
+из README (написанная в bash-стиле, как это часто делают в туториалах)
+попадала в PowerShell, `\` оставался в командной строке как отдельный,
+ничем не оправданный аргумент; g++ передавал его линкеру как «входной
+файл», а линкер закономерно не мог найти файл с именем `\`.
+
+**Как подтверждено:** причина не осталась гипотезой — я скачал и
+запустил ровно ту же версию PowerShell (7.6.6) в тестовом окружении и
+дословно воспроизвёл ошибку пользователя на многострочной команде с
+`\` (`/usr/bin/ld: cannot find \: No such file or directory` — то же
+сообщение, только путь к `ld` другой, так как тест шёл на Linux).
+Однострочная версия той же команды в том же PowerShell отрабатывает
+без единой ошибки.
+
+**Исправление:** все команды сборки в `README.md` и
+`docs/Experiment_Config.md` переписаны в одну строку — без `\` вообще,
+чтобы их можно было копировать в любой терминал (PowerShell, cmd.exe,
+bash) одинаково безопасно. Раздел «Сборка и запуск» также явно
+предупреждает про разницу между `\` (bash), `` ` `` (PowerShell) и `^`
+(cmd.exe), чтобы при появлении новых команд в будущем не наступить на
+те же грабли.
+
+### 2. Скрытая вторая проблема: MinGW игнорирует `#pragma comment(lib, ...)`
+
+Даже после исправления бага №1 следующая же попытка собрать
+`ping_client_app`/`pong_server_app` под MinGW привела бы к `undefined
+reference to WSAStartup` при линковке, потому что `common/net_common.h`
+подключает `ws2_32.lib` через `#pragma comment(lib, "ws2_32.lib")` —
+а это расширение понимает только MSVC; GCC/MinGW его молча
+игнорирует (подтверждено несколькими независимыми источниками,
+включая обсуждения на forum.qt.io и sourceforge.net/p/mingw, и это же
+уже было верно подмечено в README для ПР №1). Для ПР №1 (`server_app`/
+`client_app`) явный флаг `-lws2_32` уже был в командах сборки, а вот
+в новые команды ПР №2 я его изначально не добавил в саму
+копируемую строку (только упомянул отдельным предложением ниже —
+что было легко пропустить).
+
+**Исправление:** `-lws2_32` теперь встроен прямо в команды сборки для
+PowerShell/cmd.exe в README.md, а не вынесен в отдельную сноску.
+
+### 3. `run_experiments.sh` — bash-скрипт, не запускается в «голом» PowerShell
+
+`run_experiments.sh` написан на bash и требует Git Bash/WSL — в
+нативном PowerShell без них он не выполнится. Поскольку у автора
+задачи не было под рукой Git Bash/WSL (судя по вопросу — только
+MSYS2/MinGW + PowerShell), это тоже стало бы следующим препятствием.
+
+**Исправление:** добавлен `run_experiments.ps1` — независимый скрипт
+на чистом PowerShell с той же логикой (поднимает сервер с нужными
+флагами и seed, ждёт, запускает клиента, останавливает сервер, и так
+для всех 6 серий). Реально запущен и проверен в PowerShell 7.6.6
+(та же версия, что у автора задачи, скачана отдельно для проверки) —
+все 6 серий отрабатывают, `docs/latency_samples.csv` заполняется
+корректно, процессы серверов корректно завершаются после каждой серии.
+
+Промежуточная ошибка при первой версии этого скрипта: путь к CSV по
+умолчанию был `docs\latency_samples.csv` (с обратным слешем, как
+принято писать пути на Windows) — на Windows это сработало бы
+корректно, но чтобы полноценно проверить сам скрипт независимо от ОС
+(а заодно на будущее не зависеть от того, на какой ОС его в следующий
+раз тестируют), путь по умолчанию исправлен на `docs/latency_samples.csv`
+(прямой слеш) — Windows одинаково понимает оба варианта, а тестировать
+и переносить такой путь проще.
+

@@ -8,3 +8,4 @@ ping_client_app
 pong_server_app
 telemetry_tests
 docs/server_*.log
+docs/server_*.log.err

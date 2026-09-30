@@ -19,6 +19,11 @@
 //     ПР №2) — здесь вместо этого используются явные WriteU16/WriteU64/
 //     ReadU16/ReadU64 в сетевом порядке байт (big-endian).
 //
+// ПР №3 расширяет ЭТОТ ЖЕ модуль (тот же контракт, версия 2): добавлены тип
+// ACK, поле заголовка requiresAck и команды MOVEMENT/SHOOT — надёжная доставка
+// строится поверх модулей protocol и telemetry, а не рядом с ними.
+// Историческая справка ниже относится к ПР №2 (тогда заголовок был 7 байт).
+//
 // Итог: телеметрия слушает СВОИ порт/сокет (см. transport.h, отдельные
 // исполняемые файлы ping_client_app / pong_server_app), не пересекаясь
 // по проводам с MOVEMENT/SHOOT/AUTH_* из ПР №1.
@@ -32,20 +37,30 @@
 
 namespace telemetry {
 
-// Версия формата пакетов телеметрии. Меняется при несовместимом
-// изменении контракта (см. ReadHeader: пакет с другой версией отбрасывается).
-constexpr std::uint16_t kProtocolVersion = 1;
+// Версия формата пакетов. Меняется при несовместимом изменении контракта
+// (см. ReadHeader: пакет с другой версией отбрасывается).
+//   1 — ПР №2: заголовок 7 байт, только PING/PONG.
+//   2 — ПР №3: в заголовок добавлено поле requiresAck (заголовок 8 байт),
+//       добавлены типы MOVEMENT / SHOOT / ACK.
+constexpr std::uint16_t kProtocolVersion = 2;
 
 enum class PacketType : std::uint8_t {
-    Ping = 1,
-    Pong = 2,
+    Ping     = 1,
+    Pong     = 2,
+    Movement = 3, // ПР №3: позиция игрока, ненадёжная (requiresAck = 0)
+    Shoot    = 4, // ПР №3: выстрел, надёжная команда (requiresAck = 1)
+    Ack      = 5, // ПР №3: подтверждение доставки надёжного пакета
 };
 
-// Общий заголовок телеметрийного пакета (7 байт "на проводе"):
-//   packetType      uint8_t   — PacketType::Ping / PacketType::Pong
-//   sequenceNumber  uint16_t  — идентификатор измерения
+// Общий заголовок пакета (8 байт "на проводе"):
+//   packetType      uint8_t   — PacketType::*
+//   sequenceNumber  uint16_t  — номер пакета в потоке отправителя
 //   payloadSize     uint16_t  — размер payload в байтах (без заголовка)
 //   protocolVersion uint16_t  — версия формата пакета
+//   requiresAck     uint8_t   — 1: получатель обязан подтвердить пакет ACK-ом,
+//                               0: подтверждение не требуется (ПР №3)
+// Новое поле добавлено В КОНЕЦ заголовка, поэтому смещения первых четырёх
+// полей не изменились по сравнению с ПР №2.
 // Это структура для УДОБСТВА ВЫЗЫВАЮЩЕГО КОДА, а не layout "на проводе":
 // на проводе поля пишутся/читаются явными Write*/Read* ниже, без
 // reinterpret_cast и без #pragma pack.
@@ -54,9 +69,10 @@ struct Header {
     std::uint16_t sequenceNumber;
     std::uint16_t payloadSize;
     std::uint16_t protocolVersion;
+    bool requiresAck = false;
 };
 
-constexpr std::size_t kHeaderSize = 1 + 2 + 2 + 2; // 7 байт
+constexpr std::size_t kHeaderSize = 1 + 2 + 2 + 2 + 1; // 8 байт
 
 // PING: клиент -> сервер. payload = clientSendTimeUs (8 байт).
 struct PingPacket {
@@ -64,7 +80,7 @@ struct PingPacket {
     std::uint64_t clientSendTimeUs;
 };
 constexpr std::size_t kPingPayloadSize = 8;
-constexpr std::size_t kPingPacketSize = kHeaderSize + kPingPayloadSize; // 15 байт
+constexpr std::size_t kPingPacketSize = kHeaderSize + kPingPayloadSize; // 16 байт
 
 // PONG: сервер -> клиент. payload = исходная метка клиента +
 // серверные метки приёма/отправки (диагностика; часы не синхронизированы,
@@ -76,7 +92,45 @@ struct PongPacket {
     std::uint64_t serverSendTimeUs;
 };
 constexpr std::size_t kPongPayloadSize = 8 + 8 + 8;
-constexpr std::size_t kPongPacketSize = kHeaderSize + kPongPayloadSize; // 31 байт
+constexpr std::size_t kPongPacketSize = kHeaderSize + kPongPayloadSize; // 32 байта
+
+// MOVEMENT: клиент -> сервер. payload = позиция игрока (x, y) в пикселях.
+// В проекте это НЕнадёжная команда (requiresAck = 0): позиция шлётся часто, и
+// потерянный пакет тут же перекрывается следующим, более свежим — повторная
+// отправка устаревшей позиции только вредила бы (см. docs/Reliability_Protocol.md).
+struct MovementPacket {
+    std::uint16_t sequenceNumber;
+    bool requiresAck;
+    std::uint16_t x;
+    std::uint16_t y;
+};
+constexpr std::size_t kMovementPayloadSize = 2 + 2;
+constexpr std::size_t kMovementPacketSize = kHeaderSize + kMovementPayloadSize; // 12 байт
+
+// SHOOT: клиент -> сервер. payload = угол прицеливания (градусы) + id оружия.
+// Критичное событие — по умолчанию надёжная команда (requiresAck = 1).
+struct ShootPacket {
+    std::uint16_t sequenceNumber;
+    bool requiresAck;
+    std::uint16_t aimAngleDeg;
+    std::uint8_t weaponId;
+};
+constexpr std::size_t kShootPayloadSize = 2 + 1;
+constexpr std::size_t kShootPacketSize = kHeaderSize + kShootPayloadSize; // 11 байт
+
+// ACK: подтверждение доставки надёжного пакета. Payload — только номер
+// подтверждаемого пакета (struct AckPayload из задания). Сам ACK НЕ требует
+// подтверждения: requiresAck у него всегда 0, а ParseAck отбрасывает ACK с
+// requiresAck = 1 (иначе получилась бы бесконечная цепочка "ACK на ACK").
+struct AckPayload {
+    std::uint16_t acknowledgedSequence;
+};
+struct AckPacket {
+    std::uint16_t sequenceNumber; // собственный номер ACK (сервер ставит тот же, что у подтверждаемого)
+    AckPayload payload;
+};
+constexpr std::size_t kAckPayloadSize = 2;
+constexpr std::size_t kAckPacketSize = kHeaderSize + kAckPayloadSize; // 10 байт
 
 // ---- Явная (не побайтовая) сериализация примитивов, сетевой порядок ----
 
@@ -98,6 +152,12 @@ std::vector<std::uint8_t> SerializePong(std::uint16_t sequenceNumber,
                                          std::uint64_t serverReceiveTimeUs,
                                          std::uint64_t serverSendTimeUs);
 
+std::vector<std::uint8_t> SerializeMovement(std::uint16_t sequenceNumber, std::uint16_t x, std::uint16_t y,
+                                             bool requiresAck = false);
+std::vector<std::uint8_t> SerializeShoot(std::uint16_t sequenceNumber, std::uint16_t aimAngleDeg,
+                                          std::uint8_t weaponId, bool requiresAck = true);
+std::vector<std::uint8_t> SerializeAck(std::uint16_t sequenceNumber, std::uint16_t acknowledgedSequence);
+
 // Разбор возвращает std::nullopt на ЛЮБОЙ некорректной датаграмме:
 // нехватка байт, несовпадение packetType, неверная protocolVersion,
 // payloadSize не совпадает с фактической длиной датаграммы. Вызывающий
@@ -105,11 +165,15 @@ std::vector<std::uint8_t> SerializePong(std::uint16_t sequenceNumber,
 // и отразить это в логе — сам парсер не логирует и не бросает исключения.
 std::optional<PingPacket> ParsePing(const std::uint8_t* data, std::size_t size);
 std::optional<PongPacket> ParsePong(const std::uint8_t* data, std::size_t size);
+std::optional<MovementPacket> ParseMovement(const std::uint8_t* data, std::size_t size);
+std::optional<ShootPacket> ParseShoot(const std::uint8_t* data, std::size_t size);
+// ParseAck дополнительно требует requiresAck == 0.
+std::optional<AckPacket> ParseAck(const std::uint8_t* data, std::size_t size);
 
 // Читает только заголовок (используется, чтобы понять packetType ДО того,
 // как выбирать, каким ParseXxx разбирать остаток датаграммы). Возвращает
 // nullopt, если данных меньше kHeaderSize или встречен неизвестный тип
-// пакета/версия — в этом случае датаграмма отбрасывается целиком.
+// пакета/версия или requiresAck вне {0, 1} — датаграмма отбрасывается целиком.
 std::optional<Header> ReadHeader(const std::uint8_t* data, std::size_t size);
 
 } // namespace telemetry

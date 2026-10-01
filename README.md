@@ -424,3 +424,176 @@ MSYS2/MinGW + PowerShell), это тоже стало бы следующим п
 (прямой слеш) — Windows одинаково понимает оба варианта, а тестировать
 и переносить такой путь проще.
 
+
+---
+
+# Практическая работа №3 — надёжная доставка поверх UDP (ACK, RTO, повторная передача)
+
+Продолжает ПР №1 и ПР №2: на тех же модулях `protocol` и `telemetry` построен
+механизм подтверждений (ACK), адаптивного тайм-аута повторной передачи (RTO по
+SRTT/RTTVAR, как в TCP) и повторной отправки критичной команды `SHOOT`.
+Подробный отчёт с таблицами, графиками и ответами на вопросы для защиты —
+`docs/Reliability_Protocol.md`.
+
+> **Совместимость с ПР №2.** Формат пакетов повышен до версии 2 (заголовок
+> 8 байт вместо 7: добавлено поле `requiresAck`). Пакеты версии 1 новые
+> бинарники отбрасывают, поэтому `ping_client_app` / `pong_server_app` /
+> `telemetry_tests` нужно пересобрать из этого репозитория (команды сборки ПР №2
+> выше остаются верными). `.exe` из корня архива уже пересобраны под Windows (MinGW,
+> статическая линковка).
+
+## Что добавлено (структура)
+
+```
+bob_arena/
+├── protocol/protocol.h/.cpp        — РАСШИРЕНО: тип ACK, поле requiresAck,
+│                                      команды MOVEMENT / SHOOT, версия 2
+├── reliability/                    — НОВОЕ (без сокетов и без чтения часов)
+│   ├── reliable_channel.hpp/.cpp   — ReliableChannel: учёт неподтверждённых
+│   │                                  пакетов, выдача на повтор, failed_
+│   ├── adaptive_timeout.hpp/.cpp   — AdaptiveTimeout: SRTT/RTTVAR/RTO (Jacobson/Karn)
+│   └── dedup_window.hpp/.cpp       — окно дедупликации на сервере
+├── client/reliable_client.cpp      — НОВОЕ: клиент (SHOOT с ACK + PING для RTT)
+├── server/reliable_server.cpp      — НОВОЕ: сервер (ACK, дедупликация, эмуляция сети)
+├── tests/
+│   ├── test_reliable_channel.cpp   — ReliableChannel, DedupWindow, симуляция с потерями
+│   ├── test_adaptive_timeout.cpp   — формулы RTO, границы, всплеск задержки
+│   └── test_reliable_protocol.cpp  — ACK/requiresAck/SHOOT/MOVEMENT, отбраковка пакетов
+├── analysis/analyze_reliability.py — таблицы, сверка с логами сервера, 2 графика
+├── run_reliability_experiments.sh / .ps1 — прогон всех серий (bash / PowerShell)
+└── docs/
+    ├── Reliability_Protocol.md     — НОВОЕ: отчёт
+    ├── reliability_samples.csv     — НОВОЕ: журнал доставки (по строке на команду)
+    ├── rto_timeline.csv            — НОВОЕ: ряд измерений RTO (для графика)
+    ├── server_rel_*.log            — НОВОЕ: логи сервера по сериям
+    ├── Protocol_Specification.md   — дополнен приложением про ACK и requiresAck
+    └── graphs/                     — + attempts_vs_loss.png, rto_over_time.png
+```
+
+## Что реализовано
+
+- [x] Расширение протокола: тип `ACK`, поле `requiresAck`, `struct AckPayload`,
+      ручная сериализация в сетевом порядке байт, валидация длины/версии/типа/флага до чтения полей
+- [x] Разделение команд: `SHOOT` — надёжная, `MOVEMENT` — ненадёжная (обоснование в отчёте),
+      `PING`/`PONG` и `ACK` подтверждений не требуют (ACK с `requiresAck = 1` отбрасывается)
+- [x] `ReliableChannel` (`OnSent`, `OnAckReceived`, `CollectForRetransmission`,
+      `PendingCount`, `FailedCount`) без обращения к сокетам; дубликат ACK игнорируется;
+      пакет не возвращается чаще раза в RTO; после `maxAttempts` попыток уходит в `failed_`
+      с записью в лог
+- [x] `AdaptiveTimeout`: `RTTVAR = 0.75·RTTVAR + 0.25·|SRTT − RTT|`, `RTO = SRTT + 4·RTTVAR`,
+      границы [100 мс, 3000 мс], инициализация первым сэмплом; питается RTT из PING/PONG (ПР №2)
+      и временем до ACK
+- [x] Сервер: ACK сразу при `requiresAck = 1`, затем эффект; `DedupWindow` не даёт применить
+      эффект повторно, ACK на дубликат отправляется снова
+- [x] Клиент: регистрация в `ReliableChannel`, повторная отправка в каждом такте цикла,
+      лог «выстрел не подтверждён сервером» при окончательной недоставке
+- [x] Эксперимент: 6 обязательных серий по 200 команд (минимум 50) + 3 вспомогательные
+      (сравнение с фиксированным RTO 1000 мс / 100 мс и демонстрация `failed`);
+      `docs/reliability_samples.csv`, 2 графика, таблица в отчёте
+- [x] Автотесты: 62 теста в сумме (23 из ПР №2 + 39 новых), включая дублирование ACK,
+      истечение попыток и сквозную симуляцию с потерями; тесты также проходят под
+      AddressSanitizer + UBSan
+- [x] `docs/Reliability_Protocol.md`, дополненный `docs/Protocol_Specification.md`
+- [ ] Ветка `feature/reliable-delivery`, issues, Pull Request, ревью — ветка и коммиты
+      подготовлены ЛОКАЛЬНО, issues/PR создаются вручную (см. «Git-workflow» ниже)
+
+## Сборка и запуск
+
+Все команды в одну строку (в PowerShell `\` для переноса строк не работает — см.
+«Баги ... в процессе разработки» ниже). Нужен `-lws2_32` для MinGW.
+
+**PowerShell / cmd.exe (Windows, MinGW из MSYS2):**
+```
+g++ -std=c++17 -O2 protocol/protocol.cpp reliability/adaptive_timeout.cpp reliability/reliable_channel.cpp telemetry/telemetry.cpp telemetry/transport.cpp client/reliable_client.cpp -o reliable_client_app.exe -lws2_32
+g++ -std=c++17 -O2 protocol/protocol.cpp reliability/dedup_window.cpp telemetry/transport.cpp server/reliable_server.cpp -o reliable_server_app.exe -lws2_32
+```
+
+**Developer Command Prompt for VS (MSVC):**
+```
+cl /std:c++17 /EHsc protocol/protocol.cpp reliability/adaptive_timeout.cpp reliability/reliable_channel.cpp telemetry/telemetry.cpp telemetry/transport.cpp client/reliable_client.cpp /Fe:reliable_client_app.exe ws2_32.lib
+cl /std:c++17 /EHsc protocol/protocol.cpp reliability/dedup_window.cpp telemetry/transport.cpp server/reliable_server.cpp /Fe:reliable_server_app.exe ws2_32.lib
+```
+
+**Linux/macOS/Git Bash/WSL (bash):** те же команды без `.exe` и без `-lws2_32`.
+
+**Одна серия вручную** (два окна терминала; порт по умолчанию `27017`):
+```
+.\reliable_server_app.exe 27017 --loss-percent=10 --seed=1
+.\reliable_client_app.exe 127.0.0.1 27017 loss_10 100 100 docs/reliability_samples.csv
+```
+Флаги сервера: `--loss-percent`, `--delay-ms`, `--jitter-min-ms`, `--jitter-max-ms`, `--seed`,
+`--dedup-window`. Потери применяются независимо в каждую сторону (к входящим пакетам и к
+исходящим ACK/PONG). Дополнительные флаги клиента: `--max-attempts=N`, `--fixed-rto-ms=N`
+(постоянный RTO вместо адаптивного), `--ping-interval-ms=N`, `--rto-csv=путь`.
+
+**Все серии сразу:**
+- PowerShell (без bash): 
+  ```powershell
+  .\run_reliability_experiments.ps1
+  python analysis/analyze_reliability.py
+  ```
+  Параметры: `-Count 50 -IntervalMs 100`. Полный прогон при 200 командах занимает около 5 минут.
+- bash:
+  ```bash
+  COUNT=200 CLIENT=./reliable_client_app SERVER=./reliable_server_app ./run_reliability_experiments.sh
+  python3 analysis/analyze_reliability.py
+  ```
+
+`analyze_reliability.py` печатает таблицы для отчёта, сверяет журнал клиента с логами
+сервера (ни один эффект не применён дважды, каждая подтверждённая команда применена)
+и строит графики в `docs/graphs/`. Требуется `matplotlib`.
+
+**Тесты (все: ПР №2 + ПР №3):**
+```
+g++ -std=c++17 protocol/protocol.cpp telemetry/telemetry.cpp reliability/adaptive_timeout.cpp reliability/reliable_channel.cpp reliability/dedup_window.cpp tests/test_protocol.cpp tests/test_telemetry.cpp tests/test_reliable_protocol.cpp tests/test_adaptive_timeout.cpp tests/test_reliable_channel.cpp tests/test_main.cpp -o telemetry_tests.exe
+.\telemetry_tests.exe
+```
+Ожидаемый результат: `62 тестов, 0 провалено`. Тестовый харнесс — `tests/mini_test.h`
+(как в ПР №2, без Catch2; три теста из задания перенесены дословно).
+
+## Git-workflow (ветка/issues/PR)
+
+Локально создана ветка `feature/reliable-delivery` (от `main`/текущей ветки ПР №2) с коммитами
+вида `feat: extend protocol with ACK ...`, `feat: ack-based retransmission ...`,
+`feat: adaptive RTO ...`, `docs: add reliability report`. Публикация:
+
+```
+git push -u origin feature/reliable-delivery
+```
+
+Затем вручную: issues на каждую подзадачу (расширение протокола; `ReliableChannel`;
+`AdaptiveTimeout`; клиент/сервер с ACK и дедупликацией; тесты; эксперимент и графики;
+отчёт), Pull Request `feature/reliable-delivery` → `main`, ревью участником команды.
+
+## Известные ограничения
+
+- Эксперимент выполнен по локальной петле в Linux-песочнице; потери, задержка и джиттер
+  эмулируются сервером (как в ПР №2; Clumsy — только Windows). Сборка под Windows проверена
+  MinGW-кросс-компиляцией, но запуск на Windows 11 и PowerShell-скрипт
+  `run_reliability_experiments.ps1` в этой среде НЕ выполнялись (написан по образцу
+  `run_experiments.ps1` из ПР №2, который был проверен).
+- На Windows таймер сокета и `Sleep` имеют гранулярность около 1–15 мс, поэтому эмулируемая
+  задержка и такт клиента (2 мс) там менее точны, чем на Linux; на выводы по формулам это
+  не влияет, но числа в таблицах будут немного другими.
+- Реальная доля потерь в серии (200 команд) отличается от номинальной на несколько
+  процентных пунктов — см. таблицу в отчёте.
+- `failed` означает «ACK не получен», а не «сервер не применил команду»: сервер мог
+  применить выстрел, но все ACK потерялись (пример — seq 107 в `jitter_loss_10`).
+
+## Баги и нюансы, найденные в процессе разработки ПР №3
+
+1. **Потерянный хвост лога сервера.** Сервер останавливают принудительно (`kill` /
+   `Stop-Process`), а при перенаправлении вывода в файл `stdout` буферизован — последние
+   строки лога пропадали, и сверка «эффекты на сервере ↔ журнал клиента» врала.
+   Исправление: `setvbuf(stdout, nullptr, _IONBF, 0)` в `reliable_server.cpp`.
+2. **RTO до первого измерения.** Код из задания даёт RTO = 0 (затем 100 мс по нижней границе),
+   поэтому до первого RTT клиент слал бы ложные повторы. Добавлено начальное значение 1000 мс
+   (RFC 6298).
+3. **Сэмпл RTT от повторно отправленного пакета** искажал бы SRTT (неизвестно, на какую
+   отправку пришёл ACK): учитываются только ACK на пакеты, отправленные с первой попытки
+   (правило Карелса).
+4. **Недетерминированный порядок `unordered_map`.** `CollectForRetransmission` сортирует
+   результат по времени первой отправки, иначе повторы и тесты зависели бы от реализации
+   стандартной библиотеки.
+5. **Несовместимость версий протокола.** Повышение версии протокола сделало бинарники ПР №2
+   несовместимыми — это зафиксировано в блоке «Совместимость с ПР №2» выше.

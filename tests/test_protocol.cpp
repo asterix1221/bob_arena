@@ -38,12 +38,14 @@ TEST_CASE("Байтовый порядок в заголовке и полях �
     // payloadSize = 8 -> 0x00, 0x08
     REQUIRE(bytes[3] == 0x00);
     REQUIRE(bytes[4] == 0x08);
-    // protocolVersion = kProtocolVersion (1) -> 0x00, 0x01
+    // protocolVersion = kProtocolVersion (2, ПР №3) -> 0x00, 0x02
     REQUIRE(bytes[5] == 0x00);
-    REQUIRE(bytes[6] == 0x01);
+    REQUIRE(bytes[6] == 0x02);
+    // requiresAck = 0 (PING подтверждений не требует)
+    REQUIRE(bytes[7] == 0x00);
     // clientSendTimeUs = 0x0102030405060708 -> старший байт первым
-    REQUIRE(bytes[7] == 0x01);
-    REQUIRE(bytes[14] == 0x08);
+    REQUIRE(bytes[8] == 0x01);
+    REQUIRE(bytes[15] == 0x08);
 }
 
 TEST_CASE("Усечённый PING отклоняется (не хватает байт полезной нагрузки)") {
@@ -51,7 +53,7 @@ TEST_CASE("Усечённый PING отклоняется (не хватает �
     REQUIRE_FALSE(ParsePing(bytes.data(), bytes.size() - 1).has_value());
 }
 
-TEST_CASE("Усечённый заголовок (меньше 7 байт) отклоняется") {
+TEST_CASE("Усечённый заголовок (меньше kHeaderSize байт) отклоняется") {
     std::uint8_t tiny[3] = {1, 0, 0};
     REQUIRE_FALSE(ReadHeader(tiny, sizeof(tiny)).has_value());
     REQUIRE_FALSE(ParsePing(tiny, sizeof(tiny)).has_value());
@@ -79,7 +81,7 @@ TEST_CASE("Неизвестный packetType отклоняется") {
 TEST_CASE("Несовпадающая версия протокола отклоняется") {
     auto bytes = SerializePing(1, 42);
     bytes[5] = 0x00;
-    bytes[6] = 0x02; // protocolVersion = 2 вместо ожидаемой 1
+    bytes[6] = 0x03; // protocolVersion = 3 вместо ожидаемой 2 (kProtocolVersion)
     REQUIRE_FALSE(ReadHeader(bytes.data(), bytes.size()).has_value());
 }
 

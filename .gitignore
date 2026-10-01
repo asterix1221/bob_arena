@@ -1,7 +1,10 @@
 *.o
 *.exe
 *.out
+*.txt
 *.pdf
+/.vscode
+/.ruff_cache
 server_app
 client_app
 ping_client_app
@@ -9,3 +12,7 @@ pong_server_app
 telemetry_tests
 docs/server_*.log
 docs/server_*.log.err
+reliable_client_app
+reliable_server_app
+# логи серверов надёжной доставки нужны для сверки в analysis/analyze_reliability.py
+!docs/server_rel_*.log

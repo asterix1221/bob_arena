@@ -1,0 +1,6 @@
+[NET] LISTEN SERVER started on port 24801 (host plays as peer 1)
+[NET] peer 697438304 connected, spawn=(120.0, 360.0)
+[DASH] SERVER ACCEPTED peer=697438304 seq=111 stamina_left=65.0
+[DASH] SERVER ACCEPTED peer=697438304 seq=201 stamina_left=62.9
+[NET] peer 697438304 disconnected
+[RESULT] role=host server_stats={ "rejected_cmds": 0, "dup_cmds": 3411, "gap_fills": 0, "dash_rejects": 0, "dash_accepts": 2 } tick=451

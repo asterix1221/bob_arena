@@ -603,3 +603,301 @@ git push -u origin feature/reliable-delivery
    тестов — та же функция, что уже используется клиентами и серверами. Затронуты были и тесты
    ПР №2. Если после пересборки всё равно видны искажённые символы, проверьте шрифт консоли
    (нужен TrueType, например Cascadia/Consolas) или выполните `chcp 65001` перед запуском.
+
+
+---
+
+# Практическая работа №4 — Client-Side Prediction и Server Reconciliation (Godot 4 + Unreal Engine)
+
+В репозитории **два варианта** одной схемы («клиент шлёт ввод, сервер решает, клиент предсказывает и сверяется»):
+
+- **Godot 4** (`godot/`) — основной: сквозной проект bob_arena делается на Godot. **Запускался и измерялся**
+  (36 тестов GDScript, сценарии T1–T6 по реальному ENet, графики по логам). Описание — сразу ниже.
+- **Unreal Engine** (`Source/`, `BobArenaPrediction.uproject`) — по буквальному тексту задания (CMC). Движка в среде
+  разработки не было, код **не компилировался и не запускался** — описание в следующих подразделах этого раздела.
+
+## ПР №4 на Godot 4 (проверено)
+
+Структура:
+
+```
+bob_arena/
+├── godot/                         — НОВОЕ: проект Godot 4 (запуск: godot --path godot)
+│   ├── project.godot, scenes/main.tscn
+│   ├── scripts/main.gd            — «клей»: ENet, RPC, ввод, отрисовка, лог (без игровой логики)
+│   ├── scripts/sim/               — вся логика, без сети и Node:
+│   │   ├── player_sim.gd          — детерминированный шаг игрока (аналог CharacterMovementComponent)
+│   │   ├── dash_rules.gd          — рывок: validate / begin / tick_timers (в тиках, не в секундах)
+│   │   ├── server_sim.gd          — сервер-авторитет: недоверенные команды, отказ недопустимому, снимки
+│   │   ├── client_predictor.gd    — предсказание, история, сверка, повтор команд (reconciliation)
+│   │   ├── remote_interp.gd       — интерполяция чужих игроков (Simulated Proxy)
+│   │   └── player_state.gd
+│   ├── scripts/net/net_emu.gd     — эмуляция сети: задержка (в одну сторону) + джиттер + потери
+│   ├── scripts/bot.gd             — скриптованные сценарии T1–T6 для воспроизводимых прогонов
+│   └── tests/run_tests.gd         — 36 автотестов
+├── run_godot_demo.ps1             — НОВОЕ: запуск хоста/клиента и автопрогон T1–T6 (PowerShell)
+├── tools/godot_scenarios.sh       — НОВОЕ: то же автопрогон, для bash/Linux
+├── tools/godot_report.py          — НОВОЕ: сводка и графики по логам (matplotlib)
+└── docs/
+    ├── Prediction_Implementation.md  — отчёт: часть A (Godot), часть B (Unreal)
+    ├── Prediction_Test_Matrix.md     — матрица T1–T5 (+T6): часть A заполнена фактическими числами
+    ├── media/                        — baseline_no_prediction.png, prediction_enabled.png, correction_example.png
+    └── godot/runs/, docs/godot/media/ — логи реальных прогонов и графики-источники
+```
+
+Что реализовано (Godot):
+
+- [x] Listen Server (хост играет сам) + клиенты по ENet; клиент отправляет **только ввод** `{seq, mx, my, dash}`,
+      позиция серверу не передаётся; лишние поля команды сервер отбрасывает, ввод квантует и ограничивает
+- [x] Рывок (Shift) с кулдауном 1.2 с и выносливостью; серверные проверки `already_dashing` / `cooldown` / `no_stamina`,
+      направление и дистанцию считает сервер; при отказе — `[DASH] SERVER REJECTED ...` и сообщение клиенту
+- [x] Вариант **без** предсказания (`--predict=0`, клавиша `F4`): клиент шлёт RPC и ждёт ответа сервера
+- [x] Вариант **с** предсказанием: рывок виден сразу; сервер перепроверяет; при расхождении — коррекция и
+      **повтор неподтверждённых команд**; ошибка сглаживается (>120 px — телепорт)
+- [x] Потери без reliable-канала: избыточная отправка последних 10 команд, дедупликация и «удержание» ввода на сервере
+- [x] Другие клиенты — интерполяция по снимкам (аналог network smoothing)
+- [x] Намеренное расхождение: чит на клиенте (`F1` — без кулдауна, `F2` — ещё и рывок ×3, `F3` — выкл.)
+- [x] Эмуляция сети: 100 мс / 0% и 175±25 мс / 4% (`F5`/`F6`/`F7` в игре или `-Profile` в скрипте)
+- [x] Автопрогон T1–T6, лог с метками `[DASH]` `[CORRECTION]` `[CHEAT]` `[RESULT]`, графики для отчёта
+- [x] Отчёт и матрица тестов с фактическими числами
+- [ ] Видео экрана, ссылки на видео, состав команды, хеш коммита в отчёте — вручную (см. `docs/media/README.md`)
+- [ ] Pull Request `feature/prediction` → `main`, ревью — вручную
+
+Фактические результаты (из `docs/godot/runs/summary.md`; lag — в одну сторону, RTT ≈ 2×lag):
+
+| Сценарий | Отклик «нажатие → экран» | Подтверждение сервера | Коррекции (макс. ошибка) | Отказы сервера | Финальная ошибка |
+|---|---|---|---|---|---|
+| T2: 100 мс, **без** предсказания | 242 мс | 242 мс | 3 (22.7 px) | 0 | 0.000 px |
+| T3: 100 мс, **с** предсказанием | **0 мс** | 234–242 мс | 0 | 0 | 0.000 px |
+| T4: 175±25 мс, 4% потерь | 0 мс | 358–417 мс | 0 | 3 (`cooldown`) | 0.000 px |
+| T5: то же + чит клиента | 0 мс | 383–435 мс | 6 (206 px) | 1 (`cooldown`) | 0.000 px |
+
+Запуск (PowerShell 7, из корня репозитория; нужен Godot 4.4+, проверено на 4.7.2; лучше `*_console.exe`):
+
+```powershell
+.\run_godot_demo.ps1 -Godot "C:\Godot\Godot_v4.7.2-stable_win64_console.exe" -Role Both -Profile lag100 -Predict 1   # с предсказанием
+.\run_godot_demo.ps1 -Godot "C:\Godot\Godot_v4.7.2-stable_win64_console.exe" -Role Both -Profile lag100 -Predict 0   # без
+.\run_godot_demo.ps1 -Godot "C:\Godot\Godot_v4.7.2-stable_win64_console.exe" -Role Scenarios                          # автопрогон T1–T6
+python tools\godot_report.py                                                                                          # сводка и графики
+```
+
+Управление: WASD — движение, **Shift — рывок**; без аргументов клавиши `H` (хост) / `J` (клиент к 127.0.0.1).
+Тесты Godot: `godot --headless --path godot -s res://tests/run_tests.gd` → ожидается `36 тестов, 0 провалено`.
+Кириллица: `run_godot_demo.ps1` сохранён в UTF-8 **с BOM** и выставляет `[Console]::OutputEncoding` в UTF-8; метки
+в логах — латиницей. Если в консоли «кракозябры» — `chcp 65001` и шрифт TrueType (Cascadia/Consolas).
+
+Что именно проверено при подготовке: все тесты Godot и сценарии T1–T6 перезапущены на Godot 4.7.2 (Linux, headless):
+результаты воспроизводятся по числу коррекций и отказов (времена и максимальные ошибки немного плавают — реальные
+часы); оконный режим запущен под виртуальным дисплеем (хост и клиент соединяются, рывки принимаются). Не проверялось:
+запуск `run_godot_demo.ps1` на Windows 11 (синтаксис проверен парсером PowerShell 7), игра «глазами» в окне,
+ручное управление. Известная мелочь: при остановке хоста раньше клиента в логе клиента может появиться
+`Trying to call an RPC via a multiplayer peer which is not connected` — это отложенные эмуляцией пакеты, на ход игры не влияет.
+
+Подробности (поток данных, роли, проверки, сравнение, расхождение) — `docs/Prediction_Implementation.md`, часть A.
+
+## ПР №4 на Unreal Engine (код написан, не запускался)
+
+Тема сменилась с «сырых» сокетов (ПР №1–3) на готовый сетевой стек Unreal Engine: серверно-авторитетное
+перемещение персонажа на `ACharacter` + `UCharacterMovementComponent`, игровое действие, чувствительное
+к задержке (**рывок с кулдауном и выносливостью**), и наблюдение того, как CMC компенсирует задержку —
+предсказанием на клиенте и серверными коррекциями. Идея та же, что в ПР №3 (клиент не доверяет сети,
+сервер не доверяет клиенту), только теперь «повторная передача» — это повторное проигрывание ходов.
+Подробности — `docs/Prediction_Implementation.md`, тесты — `docs/Prediction_Test_Matrix.md`.
+
+> **Важно — что проверено, а что нет.** В среде, где готовилась эта часть, нет Unreal Engine (и скачать
+> его нельзя), поэтому код `Source/` **не компилировался и не запускался**: он написан по документации
+> Epic (Networked Movement in the CMC) и штатному API `FSavedMove_Character`. Проверены средствами g++
+> (ASan+UBSan) только чистые правила рывка (`DashRules.h`, 15 новых тестов) и синтаксис
+> `run_prediction_demo.ps1` (PowerShell). Ожидайте, что при первой сборке в вашей версии UE могут
+> всплыть мелкие расхождения API — см. раздел «Если сборка не прошла». Видео/скриншоты и столбцы
+> «Фактический результат» матрицы тестов может заполнить только запуск движка — они оставлены пустыми
+> намеренно, с пометками **ЗАПОЛНИТЬ** (команда, версия UE, хеш коммита).
+
+## Что добавлено (структура)
+
+Проект Unreal лежит в корне репозитория рядом с кодом ПР №1–3 (UE сканирует только `Source/`, `Config/`,
+`Content/`, остальные папки ему не мешают):
+
+```
+bob_arena/
+├── BobArenaPrediction.uproject          — НОВОЕ: проект UE (модуль BobArenaPrediction)
+├── Config/                              — НОВОЕ: DefaultEngine/Game/Input.ini
+├── Source/
+│   ├── BobArenaPrediction.Target.cs / BobArenaPredictionEditor.Target.cs
+│   └── BobArenaPrediction/
+│       ├── DashRules.h                  — правила рывка: чистый C++, без UE (юнит-тесты)
+│       ├── BobMovementComponent.h/.cpp  — CMC: флаг рывка в compressed flags, серверная
+│       │                                   валидация, FSavedMove_Bob, счётчик коррекций
+│       ├── BobCharacter.h/.cpp          — ввод, камера, рывок, обратная связь сервера
+│       ├── BobPlayerController.h/.cpp   — Server RPC для варианта без предсказания, читы-команды
+│       ├── BobGameMode.h/.cpp           — только сервер: классы игроков, точки появления
+│       ├── BobGameState.h/.cpp          — арена строится кодом одинаково на сервере и клиентах
+│       ├── BobHUD.h/.cpp                — диагностика на экране (пинг, отклик, коррекции)
+│       └── BobArenaPrediction.h/.cpp / .Build.cs — модуль и лог-категория LogBobPrediction
+├── tests/test_dash_rules.cpp            — НОВОЕ: 15 тестов правил рывка (mini_test.h, как в ПР №2–3)
+├── run_prediction_demo.ps1              — НОВОЕ: сборка и запуск Listen Server + клиента (PowerShell)
+└── docs/
+    ├── Prediction_Implementation.md     — НОВОЕ: отчёт (поток данных, роли, проверки, сравнение)
+    ├── Prediction_Test_Matrix.md        — НОВОЕ: матрица T1–T5 (результаты заполняются после прогона)
+    └── media/README.md                  — НОВОЕ: что записать (3 ролика) — сами файлы нужно снять в UE
+```
+
+## Что реализовано
+
+- [x] Проект на `ACharacter` + `UCharacterMovementComponent` (структура Third Person), Listen Server + клиент
+- [x] Сервер — авторитет: клиент передаёт **ввод/намерение** (бит `FLAG_Custom_0` в `ServerMove` вместе с
+      ускорением и меткой времени), позиция клиента серверу не отправляется и в `ActorLocation` не пишется
+- [x] Действие, чувствительное к задержке: **рывок** (Left Shift) с кулдауном 1.5 с и выносливостью
+- [x] Серверные проверки: на земле, не во время другого рывка, кулдаун, выносливость; направление и
+      дистанцию считает сервер; отказ — `[DASH] SERVER REJECTED ... reason=...` + `ClientDashRejected`
+- [x] Вариант **без** предсказания: `bob.PredictDash 0` — клиент шлёт Server RPC и ждёт ответа сервера
+- [x] Вариант **с** предсказанием: `bob.PredictDash 1` — флаг в `SavedMove`, локальный старт рывка сразу,
+      сервер перепроверяет; при расхождении — коррекция CMC и повторное проигрывание ходов
+- [x] Состояние рывка (кулдаун, выносливость, оставшееся время, направление) сохраняется в `FSavedMove_Bob`
+      (`SetMoveFor`) и восстанавливается перед повтором хода (`PrepMoveFor`); ходы с рывком не объединяются
+- [x] Измерение отклика «нажатие → реакция» (лог `[DASH] ... response=… ms` и HUD), счётчик коррекций
+      (`[CORRECTION] #N ... error=… uu`)
+- [x] Намеренное расхождение: консоль `BobCheatNoDashRules 1` / `BobCheatDashSpeed <x>` (чит только на клиенте)
+- [x] Другие клиенты видят персонажа через стандартную репликацию + network smoothing
+- [x] `docs/Prediction_Implementation.md`, `docs/Prediction_Test_Matrix.md`, `docs/media/README.md`
+- [x] Тесты правил рывка: общий набор теперь **77 тестов** (62 из ПР №2–3 + 15 новых), проходят под ASan+UBSan
+- [ ] Сборка и запуск в Unreal Engine, видео/скриншоты, заполненная матрица, версия UE и хеш коммита в
+      отчёте — нужно сделать на машине с движком (см. ниже)
+- [ ] Pull Request `feature/prediction` → `main`, ревью — вручную (см. «Git-workflow»)
+
+## Требования и сборка (Windows 11, PowerShell 7)
+
+1. Unreal Engine (в `.uproject` указано `"EngineAssociation": "5.8"`; если у вас другая версия — ПКМ по
+   `BobArenaPrediction.uproject` → *Switch Unreal Engine version* или поправьте поле).
+2. Visual Studio 2022 с компонентами «Разработка игр на C++» / Desktop development with C++ и Windows SDK.
+3. Сборка (из корня репозитория; путь к движку — ваш):
+
+```powershell
+.\run_prediction_demo.ps1 -Role Build -EngineRoot "C:\Program Files\Epic Games\UE_5.8"
+```
+
+Или по клику на `BobArenaPrediction.uproject` — редактор сам предложит собрать модуль. Вручную то же самое:
+
+```powershell
+& "C:\Program Files\Epic Games\UE_5.8\Engine\Build\BatchFiles\Build.bat" BobArenaPredictionEditor Win64 Development "-Project=$PWD\BobArenaPrediction.uproject" -WaitMutex
+```
+
+## Запуск и демонстрация
+
+**Вариант 1 — отдельные процессы (рекомендуется для записи видео):**
+
+```powershell
+.\run_prediction_demo.ps1 -Role Both -Profile lag100 -Predict 1      # с предсказанием, 100 мс
+.\run_prediction_demo.ps1 -Role Both -Profile lag100 -Predict 0      # без предсказания
+.\run_prediction_demo.ps1 -Role Both -Profile lag150loss5 -Predict 1 # 150±25 мс, 5% потерь
+```
+
+Профили: `none`, `lag100`, `lag150loss5`; `-Role Server|Client|Both`. Скрипт собирает командную строку
+`UnrealEditor.exe "…uproject" /Engine/Maps/Entry?listen -game …` (сервер) и `… 127.0.0.1:7777 -game …` (клиент).
+Если задержка не применилась при старте — введите команды из задания в консоль клиента (`~`):
+`NetEmulation.PktLag 100`, `NetEmulation.PktLoss 0` (и проверьте Ping в HUD).
+
+**Вариант 2 — Play In Editor:** Play → Advanced Settings: *Number of Players* = **2**, *Net Mode* =
+**Play As Listen Server**; Network Emulation — там же (или командами `NetEmulation.*`). Если карта пустая или
+тёмная: File → New Level → *Basic*, сохраните в `Content/Maps/`; `ABobGameMode` подхватится как GameMode по
+умолчанию, арена достроится кодом.
+
+**Управление:** WASD — движение, мышь — камера, Space — прыжок, **Left Shift — рывок**.
+**Консоль (клавиша `~`):**
+
+| Команда | Что делает |
+|---|---|
+| `bob.PredictDash 0` / `1` | рывок без предсказания / с предсказанием (выбор режима клиента) |
+| `BobCheatNoDashRules 1` | клиент игнорирует кулдаун и выносливость (сервер — нет) → расхождение |
+| `BobCheatDashSpeed 3` | клиент считает рывок в 3 раза быстрее (при включённом чите) → расхождение по дистанции |
+| `NetEmulation.PktLag 100` и т. п. | эмуляция сети (из задания) |
+
+Метки в логе (`Saved\Logs\BobArenaPrediction*.log`) — латиницей, чтобы не было проблем с кодировкой:
+`[DASH]`, `[CORRECTION]`, `[CHEAT]`. Достать их из лога:
+
+```powershell
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+Select-String -Path .\Saved\Logs\BobArenaPrediction*.log -Pattern '\[DASH\]|\[CORRECTION\]|\[CHEAT\]' -Encoding utf8
+```
+
+**Минимальный сценарий демонстрации** (по заданию): запустить сервер и клиент → показать ходьбу и рывок
+при задержке → показать, что сервер реплицирует подтверждённое состояние → `BobCheatNoDashRules 1` и рывок
+до конца кулдауна → увидеть `SERVER REJECTED`, `[CORRECTION]`, возврат клиента к серверной позиции без
+разрыва соединения. Для каждого теста T1–T5 заполните строку в `docs/Prediction_Test_Matrix.md`.
+
+## Тесты (все: ПР №2 + ПР №3 + ПР №4)
+
+```powershell
+g++ -std=c++17 protocol/protocol.cpp telemetry/telemetry.cpp reliability/adaptive_timeout.cpp reliability/reliable_channel.cpp reliability/dedup_window.cpp tests/test_protocol.cpp tests/test_telemetry.cpp tests/test_reliable_protocol.cpp tests/test_adaptive_timeout.cpp tests/test_reliable_channel.cpp tests/test_dash_rules.cpp tests/test_main.cpp -o telemetry_tests.exe
+.\telemetry_tests.exe
+```
+
+Ожидаемый результат: `77 тестов, 0 провалено`. Тесты ПР №4 проверяют только правила рывка
+(`DashRules.h`): валидацию (земля/кулдаун/выносливость), детерминизм при одинаковых `dt` и
+снимок/восстановление состояния — то есть то, на чём держится reconciliation. Сетевую часть в UE они не покрывают.
+
+## Как это устроено (коротко)
+
+1. Нажатие → `bWantsToDash = true` (предсказание) **или** Server RPC (без предсказания).
+2. `FSavedMove_Bob::SetMoveFor` запоминает флаг и состояние рывка **до** хода; `GetCompressedFlags` кладёт
+   флаг в `FLAG_Custom_0`; рывок исполняется локально в `UpdateCharacterStateBeforeMovement`/`CalcVelocity`.
+3. Сервер в `UpdateFromCompressedFlags` читает намерение, в `MoveAutonomous` сам выполняет ход и вызывает
+   `BobDash::Validate` — недопустимое отклоняет.
+4. Позиции не совпали → `ClientAdjustPosition`; клиент в `ClientUpdatePositionAfterServerUpdate` встаёт в
+   серверную позицию и проигрывает заново неподтверждённые ходы (`PrepMoveFor` возвращает состояние рывка).
+5. Таймеры считаются на `DeltaTime` хода, а не по часам мира — поэтому повтор хода на клиенте воспроизводит
+   серверный результат. Подробно — `docs/Prediction_Implementation.md`.
+
+## Git-workflow (ветка/PR)
+
+Ветка `feature/prediction` создана локально. **Отступление от задания:** локальный `main` в архиве содержит
+только ПР №1, поэтому ветка ответвлена от `feature/reliable-delivery` (там ПР №1–3), иначе проект потерял бы
+предыдущие практики. Корректный порядок на GitVerse: сначала слить в `main` PR из `feature/reliable-delivery`,
+затем делать PR из `feature/prediction`. Публикация (после `git push` учётные данные нужны ваши):
+
+```powershell
+git push -u origin feature/prediction
+```
+
+Затем откройте Pull Request `feature/prediction` → `main`. Перед сдачей: подставьте в отчёт версию UE, хеш
+коммита (`git rev-parse --short HEAD`), состав команды, ссылки на видео.
+
+## Известные ограничения
+
+- Код UE не компилировался и не запускался автором заготовки (см. врезку выше).
+- Состояние рывка (кулдаун/выносливость) не входит в коррекцию CMC; после отказа сервера оно приходит
+  отдельным `ClientDashRejected` (приближённо). Штатный путь — `FCharacterMoveResponseData`.
+- Входное управление — классическое (legacy) через `BindKey`/`BindAxisKey` + `DefaultInput.ini`, а не Enhanced Input:
+  так проекту не нужны ассеты. Если в вашей версии движка легаси-ввод недоступен — привязки нужно перенести на Enhanced Input.
+- Карта по умолчанию — `/Engine/Maps/Entry`; арена, свет и визуал строятся кодом. Это сознательный отказ от
+  бинарных ассетов (`.uasset/.umap`), которые нельзя создать без редактора.
+- Эмуляция сети общая для процесса: в PIE (оба игрока в одном процессе) команды действуют на оба окна — поэтому
+  для чистых замеров предпочтителен запуск отдельными процессами (`run_prediction_demo.ps1`).
+
+## Если сборка не прошла
+
+Типичные места, где API мог поменяться между версиями UE, — все в `BobMovementComponent.*` и `BobCharacter.*`:
+сигнатуры виртуальных методов `UpdateCharacterStateBeforeMovement/AfterMovement`, `CalcVelocity`,
+`ClientUpdatePositionAfterServerUpdate`, `FSavedMove_Character::SetMoveFor/PrepMoveFor/CanCombineWith`,
+`FNetworkPredictionData_Client_Character::AllocateNewMove`. Ошибка компилятора указывает на конкретную
+строку — сверьте сигнатуру с `Engine/Source/Runtime/Engine/Classes/GameFramework/CharacterMovementComponent.h`
+вашей установки. Для подсветки кода в Zed: сгенерируйте `compile_commands.json` через UBT
+(`Build.bat -mode=GenerateClangDatabase -project="…\BobArenaPrediction.uproject" -game -engine BobArenaPredictionEditor Win64 Development`)
+и положите его в `Source/` (папка в `.gitignore`), иначе `clangd` возьмёт `compile_flags.txt` из корня (он для ПР №1–3).
+
+## Заметки по ходу работы над ПР №4
+
+1. **Кириллица в PowerShell.** `run_prediction_demo.ps1` сохранён в UTF-8 **с BOM** (так его правильно прочитает
+   и Windows PowerShell 5.1) и в начале выставляет `[Console]::OutputEncoding` в UTF-8; метки в логе движка —
+   только латиницей. Если в консоли всё равно «кракозябры» — `chcp 65001` и шрифт TrueType (Cascadia/Consolas).
+2. **Автоматическая переменная `$args`.** В первой версии скрипта строка аргументов называлась `$args` — это
+   зарезервированная переменная PowerShell; переименована в `$cmdLine`. Командная строка для `UnrealEditor.exe`
+   собирается строкой и передаётся в `Start-Process` целиком: массив аргументов экранировал бы кавычки вокруг
+   `-ExecCmds="…"` не так, как ждёт UE.
+3. **Объединение ходов.** CMC объединяет похожие ходы клиента перед отправкой; шаг интегрирования на сервере
+   тогда отличается и на границе конца рывка давал бы ложные коррекции (~десятки uu). Поэтому
+   `FSavedMove_Bob::CanCombineWith` запрещает объединять ходы с рывком.
+4. **Состояние должно быть в `SavedMove`.** Если не восстанавливать кулдаун/выносливость в `PrepMoveFor`,
+   повторное проигрывание после коррекции использовало бы «текущее» состояние и расходилось бы с сервером.
+5. **Эталон времени — `DeltaTime` хода.** Первая идея — хранить `GetWorld()->GetTimeSeconds()` последнего рывка;
+   она не воспроизводится при повторе хода (мировое время уже ушло вперёд), поэтому все таймеры считаются на dt хода.

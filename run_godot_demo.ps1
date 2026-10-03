@@ -33,6 +33,19 @@ if (-not (Get-Command $Godot -ErrorAction SilentlyContinue) -and -not (Test-Path
     Write-Error "Godot не найден: '$Godot'. Укажите путь параметром -Godot (лучше *_console.exe)."; exit 1
 }
 
+# Первый запуск: в чистой копии репозитория нет кэша Godot (папка godot\.godot, она в .gitignore).
+# Без него запуск не знает глобальных классов (class_name) и main.gd не компилируется.
+# Импорт строит кэш за несколько секунд; делаем его один раз автоматически.
+$cache = Join-Path $Proj ".godot\global_script_class_cache.cfg"
+if (-not (Test-Path $cache)) {
+    Write-Host "Первый запуск: импорт проекта Godot (создаётся кэш .godot) ..."
+    $importSink = [System.IO.Path]::GetTempFileName()
+    Start-Process -FilePath $Godot -ArgumentList "--headless --path `"$Proj`" --import" -Wait -NoNewWindow -RedirectStandardOutput $importSink | Out-Null
+    if (-not (Test-Path $cache)) {
+        Write-Error "Импорт не создал $cache. Вывод Godot:`n$(Get-Content $importSink -Raw -Encoding utf8)"; exit 1
+    }
+}
+
 function Get-Net([string]$Name) {
     switch ($Name) {
         "none"        { return "--lag=0 --jitter=0 --loss=0" }
@@ -41,11 +54,13 @@ function Get-Net([string]$Name) {
     }
 }
 
+$script:LastSink = $null
+
 function Start-Godot([string]$GodotArgs, [switch]$Wait, [switch]$Hidden) {
     $line = "--path `"$Proj`" $(if ($Hidden) { '--headless ' })-- $GodotArgs"
     if ($Hidden) {
-        $sink = [System.IO.Path]::GetTempFileName()
-        return Start-Process -FilePath $Godot -ArgumentList $line -PassThru -Wait:$Wait -NoNewWindow -RedirectStandardOutput $sink
+        $script:LastSink = [System.IO.Path]::GetTempFileName()
+        return Start-Process -FilePath $Godot -ArgumentList $line -PassThru -Wait:$Wait -NoNewWindow -RedirectStandardOutput $script:LastSink
     }
     return Start-Process -FilePath $Godot -ArgumentList $line -PassThru -Wait:$Wait
 }
@@ -70,15 +85,19 @@ if ($Role -eq "Scenarios") {
         $name = $c[0]
         $hostLog = Join-Path $Out "$name.host.log"; $cliLog = Join-Path $Out "$name.client.log"
         Remove-Item $hostLog, $cliLog -ErrorAction SilentlyContinue
+        # Godot надёжнее принимает пути с прямыми слэшами
+        $hostLogArg = $hostLog.Replace([string][char]92, "/"); $cliLogArg = $cliLog.Replace([string][char]92, "/")
         $net = "--lag=$($c[2]) --jitter=$($c[3]) --loss=$($c[4])"
-        $h = Start-Godot "--host --port=$p --quit-after=60 --exit-on-disconnect $net --out=`"$hostLog`"" -Hidden
+        $h = Start-Godot "--host --port=$p --quit-after=60 --exit-on-disconnect $net --out=`"$hostLogArg`"" -Hidden
         for ($i = 0; $i -lt 100; $i++) {
             if ((Test-Path $hostLog) -and (Select-String -Path $hostLog -Pattern "LISTEN SERVER" -Quiet)) { break }
             Start-Sleep -Milliseconds 200
         }
-        Start-Godot "--join=127.0.0.1 --port=$p --predict=$($c[1]) $net --bot=$($c[5]) --out=`"$cliLog`"" -Wait -Hidden | Out-Null
+        Start-Godot "--join=127.0.0.1 --port=$p --predict=$($c[1]) $net --bot=$($c[5]) --out=`"$cliLogArg`"" -Wait -Hidden | Out-Null
         $h | Wait-Process -Timeout 30 -ErrorAction SilentlyContinue
-        $res = if (Test-Path $cliLog) { (Select-String -Path $cliLog -Pattern "^\[RESULT\] corrections" -Encoding utf8 | Select-Object -First 1).Line } else { "НЕТ ЛОГА КЛИЕНТА" }
+        $res = if (Test-Path $cliLog) { (Select-String -Path $cliLog -Pattern "^\[RESULT\] corrections" -Encoding utf8 | Select-Object -First 1).Line } else {
+            "НЕТ ЛОГА КЛИЕНТА. Вывод Godot (клиент):`n" + (Get-Content $script:LastSink -Raw -Encoding utf8)
+        }
         Write-Host "$name : $res"
     }
     Write-Host "Логи: $Out. Графики и сводка: python tools\godot_report.py"

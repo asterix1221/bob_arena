@@ -76,7 +76,7 @@ func _now() -> float:
 
 func _log(line: String) -> void:
 	print(line)
-	if out:
+	if out and out.is_open():      # после _finish() файл закрыт, а тики ещё идут до выхода
 		out.store_line(line)
 		out.flush()
 
@@ -242,6 +242,20 @@ func _just_pressed(key: Key) -> bool:
 	return down and not was
 
 
+# Пакет, задержанный эмуляцией, может «долететь» уже после отключения собеседника — тогда не шлём (иначе
+# Godot пишет в консоль ошибки про неизвестный peer, хотя на игру это не влияет).
+func _rpc_if_connected(peer_id: int, method: String, arg: Variant = null) -> void:
+	var peer := multiplayer.multiplayer_peer
+	if peer == null or peer.get_connection_status() != MultiplayerPeer.CONNECTION_CONNECTED:
+		return
+	if multiplayer.is_server() and not multiplayer.get_peers().has(peer_id):
+		return
+	if arg == null:
+		rpc_id(peer_id, method)
+	else:
+		rpc_id(peer_id, method, arg)
+
+
 func _host_tick(sample: Dictionary) -> void:
 	# Хост — авторитет: его ввод идёт прямо в серверную симуляцию, предсказание не нужно.
 	var cmd := PlayerSim.make_cmd(host_cmd_seq, sample["move"], sample["dash"])
@@ -255,8 +269,8 @@ func _host_tick(sample: Dictionary) -> void:
 			if id == 1:
 				continue
 			var owner_snap := server.owner_snapshot(id)
-			emu.send(_now(), func(): rpc_id(id, "cli_owner", owner_snap))
-			emu.send(_now(), func(): rpc_id(id, "cli_world", world))
+			emu.send(_now(), func(): _rpc_if_connected(id, "cli_owner", owner_snap))
+			emu.send(_now(), func(): _rpc_if_connected(id, "cli_world", world))
 
 
 func _client_tick(sample: Dictionary) -> void:
@@ -269,9 +283,9 @@ func _client_tick(sample: Dictionary) -> void:
 		_log(predictor.events[i])
 	_log("POS,%d,%d,%.2f,%.2f" % [int(_now()), predictor.next_seq - 1, predictor.state.pos.x, predictor.state.pos.y])
 	var cmds := predictor.packet_cmds()
-	emu.send(_now(), func(): rpc_id(1, "srv_cmds", cmds))
+	emu.send(_now(), func(): _rpc_if_connected(1, "srv_cmds", cmds))
 	if res["send_dash_request"]:
-		emu.send(_now(), func(): rpc_id(1, "srv_request_dash"), true)
+		emu.send(_now(), func(): _rpc_if_connected(1, "srv_request_dash"), true)
 
 
 func _handle_ui_keys() -> void:

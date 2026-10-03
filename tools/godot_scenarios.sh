@@ -6,6 +6,7 @@ set -u
 GODOT="${GODOT:-godot}"
 OUT="${1:-docs/godot/runs}"
 PROJ="$(cd "$(dirname "$0")/.." && pwd)/godot"
+[ -f "$PROJ/.godot/global_script_class_cache.cfg" ] || "$GODOT" --headless --path "$PROJ" --import >/dev/null 2>&1   # кэш class_name нужен для headless-запуска
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"   # Godot не понимает относительные пути в FileAccess — нужен абсолютный
 OUT="$(cd "$OUT" && pwd)"   # Godot не понимает относительные пути в FileAccess — нужен абсолютный

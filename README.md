@@ -681,6 +681,11 @@ bob_arena/
 python tools\godot_report.py                                                                                          # сводка и графики
 ```
 
+**Первый запуск:** в чистой копии репозитория нет кэша Godot (`godot/.godot` в `.gitignore`), а без него
+`main.gd` не компилируется (`Identifier "NetEmu" not declared` и т. п., логи не создаются). `run_godot_demo.ps1` и
+`tools/godot_scenarios.sh` теперь сами выполняют импорт один раз; вручную — `godot --headless --path godot --import`
+(или просто один раз откройте папку `godot` в редакторе Godot). Если лог клиента не создан, скрипт печатает вывод Godot.
+
 Управление: WASD — движение, **Shift — рывок**; без аргументов клавиши `H` (хост) / `J` (клиент к 127.0.0.1).
 Тесты Godot: `godot --headless --path godot -s res://tests/run_tests.gd` → ожидается `36 тестов, 0 провалено`.
 Кириллица: `run_godot_demo.ps1` сохранён в UTF-8 **с BOM** и выставляет `[Console]::OutputEncoding` в UTF-8; метки

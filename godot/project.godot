@@ -1,0 +1,19 @@
+; Engine configuration file.
+; ПР №4 — Client-Side Prediction / Server Reconciliation на Godot 4.
+config_version=5
+
+[application]
+
+config/name="BobArenaPrediction"
+config/description="ПР №4: серверно-авторитетное движение, client-side prediction, reconciliation"
+run/main_scene="res://scenes/main.tscn"
+config/features=PackedStringArray("4.4")
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
+
+[physics]
+
+common/physics_ticks_per_second=60

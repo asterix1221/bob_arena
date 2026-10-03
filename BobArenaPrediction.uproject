@@ -1,0 +1,13 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "5.8",
+	"Category": "",
+	"Description": "Practical work 4: Client-Side Prediction and Server Reconciliation (Unreal Engine, C++)",
+	"Modules": [
+		{
+			"Name": "BobArenaPrediction",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}

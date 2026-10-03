@@ -16,3 +16,17 @@ reliable_client_app
 reliable_server_app
 # логи серверов надёжной доставки нужны для сверки в analysis/analyze_reliability.py
 !docs/server_rel_*.log
+
+# ПР №4: Unreal Engine (генерируется при сборке/открытии проекта)
+/Binaries/
+/Intermediate/
+/Saved/
+/DerivedDataCache/
+/.vs/
+*.sln
+*.suo
+*.VC.db
+/Source/compile_commands.json
+
+# ПР №4 (Godot): кэш редактора (пересоздаётся при открытии проекта)
+/godot/.godot/

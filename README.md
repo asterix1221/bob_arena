@@ -1,4 +1,5 @@
-![Uploading Снимок экрана 2026-10-04 180223.png…]()
+<img width="397" height="212" alt="Снимок экрана 2026-10-04 180223" src="https://github.com/user-attachments/assets/f5a96710-cc26-4535-9df2-c336d0b4c0fd" />
+
 
 # Практическая работа №1 — UDP-протокол и архитектура
 

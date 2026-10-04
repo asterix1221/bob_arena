@@ -1,4 +1,5 @@
-<img width="397" height="212" alt="Снимок экрана 2026-10-04 180223" src="https://github.com/user-attachments/assets/f5a96710-cc26-4535-9df2-c336d0b4c0fd" />
+<img width="853" height="1106" alt="image" src="https://github.com/user-attachments/assets/931da974-df3f-4bb9-8dcc-dfac30ee0b41" />
+
 
 
 # Практическая работа №1 — UDP-протокол и архитектура

@@ -608,5 +608,5 @@ git push -u origin feature/reliable-delivery
    ПР №2. Если после пересборки всё равно видны искажённые символы, проверьте шрифт консоли
    (нужен TrueType, например Cascadia/Consolas) или выполните `chcp 65001` перед запуском.
 
-   
+<img width="397" height="212" alt="Снимок экрана 2026-10-04 180223" src="https://github.com/user-attachments/assets/cefe170b-3a26-4ca7-8a26-a996cc685b63" />   
 <img width="853" height="1106" alt="image" src="https://github.com/user-attachments/assets/931da974-df3f-4bb9-8dcc-dfac30ee0b41" />

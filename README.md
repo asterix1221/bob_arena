@@ -1,5 +1,4 @@
-<img width="397" height="212" alt="image" src="https://github.com/user-attachments/assets/b45658c5-364c-4253-8090-936b0680d42e" />
-<img width="853" height="1106" alt="image" src="https://github.com/user-attachments/assets/931da974-df3f-4bb9-8dcc-dfac30ee0b41" />
+
 
 
 
@@ -608,3 +607,7 @@ git push -u origin feature/reliable-delivery
    тестов — та же функция, что уже используется клиентами и серверами. Затронуты были и тесты
    ПР №2. Если после пересборки всё равно видны искажённые символы, проверьте шрифт консоли
    (нужен TrueType, например Cascadia/Consolas) или выполните `chcp 65001` перед запуском.
+
+   
+<img width="397" height="212" alt="image" src="https://github.com/user-attachments/assets/b45658c5-364c-4253-8090-936b0680d42e" />
+<img width="853" height="1106" alt="image" src="https://github.com/user-attachments/assets/931da974-df3f-4bb9-8dcc-dfac30ee0b41" />

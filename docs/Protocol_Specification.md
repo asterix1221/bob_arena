@@ -249,3 +249,53 @@ struct AckPayload {
 Описание алгоритма (адаптивный RTO, ограничение числа попыток, окно
 дедупликации на сервере) и результаты эксперимента — в
 `docs/Reliability_Protocol.md`.
+
+---
+
+## Приложение: игровые пакеты для игры на Godot (этап «доработка игры», M1)
+
+Заголовок (8 байт v2: `type u8 | seq u16 | payloadSize u16 | version u16 | requiresAck u8`) и версия формата
+**не менялись**: бинарники и тесты ПР №2–3 остаются рабочими. Добавлены типы 6–11; `ReadHeader` принимает
+`type ∈ [1, 11]`, первый неизвестный тип теперь 12 (одно существующее правило теста обновлено: «0 и 12», было «0 и 6»).
+Все числа — big-endian. Версия игрового протокола (`kGameProtocolVersion = 1`) передаётся в `Hello`/`Welcome`.
+
+| Тип | Код | Канал | Направление | Payload |
+|---|---|---|---|---|
+| Hello | 6 | надёжный (`requiresAck=1`) | клиент → хост | `gameProto u8, colorIdx u8, nameLen u8, name[≤16]` (UTF-8, непрозрачные байты) |
+| Welcome | 7 | надёжный | хост → клиент | `status u8, gameProto u8, playerId u8, serverTick u16, tickRateHz u8, seed u32` (10 байт); `status`: 0 ок, 1 мест нет, 2 версия |
+| Input | 8 | ненадёжный (`requiresAck=0`) | клиент → хост | `firstCmdSeq u16, count u8 (1..16), count × {axis i8, buttons u8}`; команда i имеет номер `firstCmdSeq+i` (mod 65536) |
+| Snapshot | 9 | ненадёжный | хост → клиент | `tick u16, ackCmdSeq u16, nPlayers u8 (≤8), players, ownerLen u8 (≤96), ownerState, nRunes u8 (≤8), runes` |
+| GameEvent | 10 | надёжный | хост → клиент | `eventId u16, kind u8, tick u16, a u8, b u8, x i16, y i16, v i16` (13 байт) |
+| Leave | 11 | надёжный | любая | `reason u8` |
+
+`PlayerEntry` (13 байт): `id u8, x i16, y i16, vx i16, vy i16, hp u8, flags u8, buffs u16`.
+`RuneEntry` (6 байт): `id u8, type u8, x i16, y i16`. `ownerState` — непрозрачный блок полного состояния игрока-получателя
+(нужен для сверки/reconciliation; формат задаёт симуляция). Кнопки `buttons`: прыжок 1, рывок 2, лёгкий удар 4,
+тяжёлый 8, вниз 16, прыжок удерживается 32. В `Input` **нет позиций** — только ввод (требование ПР №4).
+
+Строгие правила разбора (одинаковы в C++ и GDScript, проверяются golden-векторами):
+
+- `Hello/Welcome/GameEvent/Leave` принимаются только с `requiresAck=1`; `Input/Snapshot` — только с `requiresAck=0`;
+- `payloadSize` обязан совпадать с фактическим хвостом датаграммы, счётчики не выше лимитов, лишних байт нет;
+- тип 0 и ≥12, чужая версия, `requiresAck>1` — отказ; разбор мусора никогда не падает (20 000 случайных датаграмм в тестах).
+
+Семантика доставки (то же, что в ПР №3, `docs/Reliability_Protocol.md`): получатель надёжного пакета отвечает
+`Ack` (в том числе на дубликат) и отбрасывает повторы окном `DedupWindow(1024)`; отправитель повторяет по адаптивному RTO
+(без экспоненциального увеличения, как в ПР №3), после 6 попыток объявляет доставку проваленной. **Порядок надёжных
+пакетов не гарантируется**, поэтому `GameEvent` идемпотентны: клиент игнорирует повторы по `eventId`.
+Нумерация `seq` — общий счётчик на собеседника (16 бит, с переходом через 65535; тест проходит границу), у `Ack` в поле `seq`
+стоит подтверждаемый номер. Keepalive: `Ping` 4 раза в секунду (тот же `Ping/Pong` ПР №2: на нём считаются RTT, джиттер и доля
+потерянных пингов), молчание 3 секунды = обрыв (`peer_lost("timeout")`).
+
+### Реализации и проверки
+
+| Что | Где |
+|---|---|
+| C++ (эталон): `Serialize*/Parse*` | `protocol/protocol.{h,cpp}`, тесты `tests/test_game_packets.cpp` (14 тестов) |
+| GDScript: `Wire`, `Proto`, `AdaptiveTimeout`, `DedupWindow`, `ReliableChannel`, `NetNode`, `Link`/`UdpLink`/`LoopLink`, `RateMeter` | `godot/scripts/net/` |
+| Эталонные байты и трассы из C++ | `tools/gen_golden_vectors.cpp` → `godot/tests/golden_vectors.json` |
+| Тесты порта на виртуальном времени (20) | `godot --headless --path godot -s res://tests/run_net_tests.gd` |
+| Реальный UDP + совместимость с C++ `pong_server_app` | `GODOT=<путь> ./tools/net_interop.sh` |
+
+Эмуляция сети (`Link.set_emulation(lag, jitter, loss)`) работает на уровне датаграмм: задержка, равномерный джиттер
+(возможна перестановка пакетов) и потери исходящего трафика; включённая на обеих сторонах, она даёт RTT ≈ 2·lag и потери в обе стороны.

@@ -41,6 +41,31 @@ std::optional<std::uint64_t> ReadU64(const std::uint8_t*& p, const std::uint8_t*
     return v;
 }
 
+void WriteU32(std::vector<std::uint8_t>& out, std::uint32_t v) {
+    for (int shift = 24; shift >= 0; shift -= 8) {
+        out.push_back(static_cast<std::uint8_t>(v >> shift));
+    }
+}
+
+void WriteI16(std::vector<std::uint8_t>& out, std::int16_t v) {
+    WriteU16(out, static_cast<std::uint16_t>(v));
+}
+
+std::optional<std::uint32_t> ReadU32(const std::uint8_t*& p, const std::uint8_t* end) {
+    if (end - p < 4) return std::nullopt;
+    std::uint32_t v = 0;
+    for (int i = 0; i < 4; ++i) {
+        v = (v << 8) | static_cast<std::uint32_t>(*p++);
+    }
+    return v;
+}
+
+std::optional<std::int16_t> ReadI16(const std::uint8_t*& p, const std::uint8_t* end) {
+    auto u = ReadU16(p, end);
+    if (!u) return std::nullopt;
+    return static_cast<std::int16_t>(*u);
+}
+
 static void WriteHeader(std::vector<std::uint8_t>& out, PacketType type,
                          std::uint16_t sequenceNumber, std::uint16_t payloadSize,
                          bool requiresAck = false) {
@@ -116,7 +141,7 @@ std::optional<Header> ReadHeader(const std::uint8_t* data, std::size_t size) {
     if (!rawType || !seq || !payloadSize || !version || !rawRequiresAck) return std::nullopt;
 
     if (*rawType < static_cast<std::uint8_t>(PacketType::Ping) ||
-        *rawType > static_cast<std::uint8_t>(PacketType::Ack)) {
+        *rawType > static_cast<std::uint8_t>(PacketType::Leave)) {
         return std::nullopt; // неизвестный тип пакета
     }
     if (*version != kProtocolVersion) {
@@ -234,6 +259,257 @@ std::optional<AckPacket> ParseAck(const std::uint8_t* data, std::size_t size) {
     AckPacket pkt;
     pkt.sequenceNumber = header->sequenceNumber;
     pkt.payload.acknowledgedSequence = *acked;
+    return pkt;
+}
+
+
+// ====================== Игровые пакеты ======================
+
+static void WriteHeaderFull(std::vector<std::uint8_t>& out, PacketType type, std::uint16_t seq,
+                             std::size_t payloadSize, bool requiresAck) {
+    WriteHeader(out, type, seq, static_cast<std::uint16_t>(payloadSize), requiresAck);
+}
+
+// Общая проверка: тип, requiresAck строго как у типа, payloadSize == фактический хвост.
+static std::optional<Header> CheckGameHeader(const std::uint8_t* data, std::size_t size,
+                                              PacketType type, bool requiresAck) {
+    auto header = ReadHeader(data, size);
+    if (!header || header->packetType != type) return std::nullopt;
+    if (header->requiresAck != requiresAck) return std::nullopt;
+    if (size != kHeaderSize + header->payloadSize) return std::nullopt;
+    return header;
+}
+
+std::vector<std::uint8_t> SerializeHello(std::uint16_t seq, std::uint8_t gameProto, std::uint8_t colorIdx,
+                                          const std::vector<std::uint8_t>& name) {
+    const std::size_t nameLen = name.size() > kMaxNameBytes ? kMaxNameBytes : name.size();
+    std::vector<std::uint8_t> out;
+    WriteHeaderFull(out, PacketType::Hello, seq, 3 + nameLen, true);
+    WriteU8(out, gameProto);
+    WriteU8(out, colorIdx);
+    WriteU8(out, static_cast<std::uint8_t>(nameLen));
+    out.insert(out.end(), name.begin(), name.begin() + static_cast<std::ptrdiff_t>(nameLen));
+    return out;
+}
+
+std::vector<std::uint8_t> SerializeWelcome(std::uint16_t seq, const WelcomePacket& w) {
+    std::vector<std::uint8_t> out;
+    WriteHeaderFull(out, PacketType::Welcome, seq, 1 + 1 + 1 + 2 + 1 + 4, true);
+    WriteU8(out, w.status);
+    WriteU8(out, w.gameProto);
+    WriteU8(out, w.playerId);
+    WriteU16(out, w.serverTick);
+    WriteU8(out, w.tickRateHz);
+    WriteU32(out, w.seed);
+    return out;
+}
+
+std::vector<std::uint8_t> SerializeInput(std::uint16_t seq, std::uint16_t firstCmdSeq,
+                                          const std::vector<InputCmd>& cmds) {
+    const std::size_t n = cmds.size() > kMaxInputCmds ? kMaxInputCmds : cmds.size();
+    std::vector<std::uint8_t> out;
+    WriteHeaderFull(out, PacketType::Input, seq, 2 + 1 + 2 * n, false);
+    WriteU16(out, firstCmdSeq);
+    WriteU8(out, static_cast<std::uint8_t>(n));
+    for (std::size_t i = 0; i < n; ++i) {
+        WriteU8(out, static_cast<std::uint8_t>(cmds[i].axis));
+        WriteU8(out, cmds[i].buttons);
+    }
+    return out;
+}
+
+std::vector<std::uint8_t> SerializeSnapshot(std::uint16_t seq, const SnapshotPacket& s) {
+    const std::size_t np = s.players.size() > kMaxSnapshotPlayers ? kMaxSnapshotPlayers : s.players.size();
+    const std::size_t no = s.ownerState.size() > kMaxOwnerStateBytes ? kMaxOwnerStateBytes : s.ownerState.size();
+    const std::size_t nr = s.runes.size() > kMaxSnapshotRunes ? kMaxSnapshotRunes : s.runes.size();
+    std::vector<std::uint8_t> out;
+    WriteHeaderFull(out, PacketType::Snapshot, seq, 2 + 2 + 1 + 13 * np + 1 + no + 1 + 6 * nr, false);
+    WriteU16(out, s.tick);
+    WriteU16(out, s.ackCmdSeq);
+    WriteU8(out, static_cast<std::uint8_t>(np));
+    for (std::size_t i = 0; i < np; ++i) {
+        const PlayerEntry& e = s.players[i];
+        WriteU8(out, e.id);
+        WriteI16(out, e.x);
+        WriteI16(out, e.y);
+        WriteI16(out, e.vx);
+        WriteI16(out, e.vy);
+        WriteU8(out, e.hp);
+        WriteU8(out, e.flags);
+        WriteU16(out, e.buffs);
+    }
+    WriteU8(out, static_cast<std::uint8_t>(no));
+    out.insert(out.end(), s.ownerState.begin(), s.ownerState.begin() + static_cast<std::ptrdiff_t>(no));
+    WriteU8(out, static_cast<std::uint8_t>(nr));
+    for (std::size_t i = 0; i < nr; ++i) {
+        const RuneEntry& r = s.runes[i];
+        WriteU8(out, r.id);
+        WriteU8(out, r.type);
+        WriteI16(out, r.x);
+        WriteI16(out, r.y);
+    }
+    return out;
+}
+
+std::vector<std::uint8_t> SerializeGameEvent(std::uint16_t seq, const GameEventPacket& e) {
+    std::vector<std::uint8_t> out;
+    WriteHeaderFull(out, PacketType::GameEvent, seq, kGameEventPayloadSize, true);
+    WriteU16(out, e.eventId);
+    WriteU8(out, e.kind);
+    WriteU16(out, e.tick);
+    WriteU8(out, e.a);
+    WriteU8(out, e.b);
+    WriteI16(out, e.x);
+    WriteI16(out, e.y);
+    WriteI16(out, e.v);
+    return out;
+}
+
+std::vector<std::uint8_t> SerializeLeave(std::uint16_t seq, std::uint8_t reason) {
+    std::vector<std::uint8_t> out;
+    WriteHeaderFull(out, PacketType::Leave, seq, 1, true);
+    WriteU8(out, reason);
+    return out;
+}
+
+std::optional<HelloPacket> ParseHello(const std::uint8_t* data, std::size_t size) {
+    auto h = CheckGameHeader(data, size, PacketType::Hello, true);
+    if (!h) return std::nullopt;
+    const std::uint8_t* p = data + kHeaderSize;
+    const std::uint8_t* end = data + size;
+    auto proto = ReadU8(p, end);
+    auto color = ReadU8(p, end);
+    auto nameLen = ReadU8(p, end);
+    if (!proto || !color || !nameLen) return std::nullopt;
+    if (*nameLen > kMaxNameBytes || end - p != *nameLen) return std::nullopt;
+    HelloPacket pkt;
+    pkt.sequenceNumber = h->sequenceNumber;
+    pkt.gameProto = *proto;
+    pkt.colorIdx = *color;
+    pkt.name.assign(p, end);
+    return pkt;
+}
+
+std::optional<WelcomePacket> ParseWelcome(const std::uint8_t* data, std::size_t size) {
+    auto h = CheckGameHeader(data, size, PacketType::Welcome, true);
+    if (!h) return std::nullopt;
+    const std::uint8_t* p = data + kHeaderSize;
+    const std::uint8_t* end = data + size;
+    auto status = ReadU8(p, end);
+    auto proto = ReadU8(p, end);
+    auto id = ReadU8(p, end);
+    auto tick = ReadU16(p, end);
+    auto rate = ReadU8(p, end);
+    auto seed = ReadU32(p, end);
+    if (!status || !proto || !id || !tick || !rate || !seed || p != end) return std::nullopt;
+    WelcomePacket pkt;
+    pkt.sequenceNumber = h->sequenceNumber;
+    pkt.status = *status;
+    pkt.gameProto = *proto;
+    pkt.playerId = *id;
+    pkt.serverTick = *tick;
+    pkt.tickRateHz = *rate;
+    pkt.seed = *seed;
+    return pkt;
+}
+
+std::optional<InputPacket> ParseInput(const std::uint8_t* data, std::size_t size) {
+    auto h = CheckGameHeader(data, size, PacketType::Input, false);
+    if (!h) return std::nullopt;
+    const std::uint8_t* p = data + kHeaderSize;
+    const std::uint8_t* end = data + size;
+    auto first = ReadU16(p, end);
+    auto count = ReadU8(p, end);
+    if (!first || !count) return std::nullopt;
+    if (*count < 1 || *count > kMaxInputCmds || end - p != 2 * static_cast<std::ptrdiff_t>(*count)) return std::nullopt;
+    InputPacket pkt;
+    pkt.sequenceNumber = h->sequenceNumber;
+    pkt.firstCmdSeq = *first;
+    for (std::uint8_t i = 0; i < *count; ++i) {
+        InputCmd c;
+        c.axis = static_cast<std::int8_t>(*ReadU8(p, end));
+        c.buttons = *ReadU8(p, end);
+        pkt.cmds.push_back(c);
+    }
+    return pkt;
+}
+
+std::optional<SnapshotPacket> ParseSnapshot(const std::uint8_t* data, std::size_t size) {
+    auto h = CheckGameHeader(data, size, PacketType::Snapshot, false);
+    if (!h) return std::nullopt;
+    const std::uint8_t* p = data + kHeaderSize;
+    const std::uint8_t* end = data + size;
+    SnapshotPacket pkt;
+    pkt.sequenceNumber = h->sequenceNumber;
+    auto tick = ReadU16(p, end);
+    auto ack = ReadU16(p, end);
+    auto np = ReadU8(p, end);
+    if (!tick || !ack || !np || *np > kMaxSnapshotPlayers) return std::nullopt;
+    pkt.tick = *tick;
+    pkt.ackCmdSeq = *ack;
+    for (std::uint8_t i = 0; i < *np; ++i) {
+        if (end - p < 13) return std::nullopt;
+        PlayerEntry e;
+        e.id = *ReadU8(p, end);
+        e.x = *ReadI16(p, end);
+        e.y = *ReadI16(p, end);
+        e.vx = *ReadI16(p, end);
+        e.vy = *ReadI16(p, end);
+        e.hp = *ReadU8(p, end);
+        e.flags = *ReadU8(p, end);
+        e.buffs = *ReadU16(p, end);
+        pkt.players.push_back(e);
+    }
+    auto no = ReadU8(p, end);
+    if (!no || *no > kMaxOwnerStateBytes || end - p < static_cast<std::ptrdiff_t>(*no)) return std::nullopt;
+    pkt.ownerState.assign(p, p + *no);
+    p += *no;
+    auto nr = ReadU8(p, end);
+    if (!nr || *nr > kMaxSnapshotRunes || end - p != 6 * static_cast<std::ptrdiff_t>(*nr)) return std::nullopt;
+    for (std::uint8_t i = 0; i < *nr; ++i) {
+        RuneEntry r;
+        r.id = *ReadU8(p, end);
+        r.type = *ReadU8(p, end);
+        r.x = *ReadI16(p, end);
+        r.y = *ReadI16(p, end);
+        pkt.runes.push_back(r);
+    }
+    return pkt;
+}
+
+std::optional<GameEventPacket> ParseGameEvent(const std::uint8_t* data, std::size_t size) {
+    auto h = CheckGameHeader(data, size, PacketType::GameEvent, true);
+    if (!h || h->payloadSize != kGameEventPayloadSize) return std::nullopt;
+    const std::uint8_t* p = data + kHeaderSize;
+    const std::uint8_t* end = data + size;
+    auto id = ReadU16(p, end);
+    auto kind = ReadU8(p, end);
+    auto tick = ReadU16(p, end);
+    auto a = ReadU8(p, end);
+    auto b = ReadU8(p, end);
+    auto x = ReadI16(p, end);
+    auto y = ReadI16(p, end);
+    auto v = ReadI16(p, end);
+    if (!id || !kind || !tick || !a || !b || !x || !y || !v || p != end) return std::nullopt;
+    GameEventPacket pkt;
+    pkt.sequenceNumber = h->sequenceNumber;
+    pkt.eventId = *id;
+    pkt.kind = *kind;
+    pkt.tick = *tick;
+    pkt.a = *a;
+    pkt.b = *b;
+    pkt.x = *x;
+    pkt.y = *y;
+    pkt.v = *v;
+    return pkt;
+}
+
+std::optional<LeavePacket> ParseLeave(const std::uint8_t* data, std::size_t size) {
+    auto h = CheckGameHeader(data, size, PacketType::Leave, true);
+    if (!h || h->payloadSize != 1) return std::nullopt;
+    LeavePacket pkt;
+    pkt.sequenceNumber = h->sequenceNumber;
+    pkt.reason = data[kHeaderSize];
     return pkt;
 }
 

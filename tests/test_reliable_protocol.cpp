@@ -82,11 +82,11 @@ TEST_CASE("requiresAck вне {0, 1} отклоняется уже на уров
     REQUIRE_FALSE(ParseShoot(bytes.data(), bytes.size()).has_value());
 }
 
-TEST_CASE("Неизвестные packetType (0 и 6) отклоняются") {
+TEST_CASE("Неизвестные packetType (0 и 12) отклоняются") {
     auto bytes = SerializeAck(1, 1);
     bytes[0] = 0;
     REQUIRE_FALSE(ReadHeader(bytes.data(), bytes.size()).has_value());
-    bytes[0] = 6;
+    bytes[0] = 12; // 6..11 — игровые типы, первый неизвестный — 12
     REQUIRE_FALSE(ReadHeader(bytes.data(), bytes.size()).has_value());
 }
 

@@ -910,6 +910,3 @@ git push -u origin feature/prediction
    повторное проигрывание после коррекции использовало бы «текущее» состояние и расходилось бы с сервером.
 5. **Эталон времени — `DeltaTime` хода.** Первая идея — хранить `GetWorld()->GetTimeSeconds()` последнего рывка;
    она не воспроизводится при повторе хода (мировое время уже ушло вперёд), поэтому все таймеры считаются на dt хода.
- 
-<img width="397" height="212" alt="Снимок экрана 2026-10-04 180223" src="https://github.com/user-attachments/assets/cefe170b-3a26-4ca7-8a26-a996cc685b63" />   
-<img width="853" height="1106" alt="image" src="https://github.com/user-attachments/assets/931da974-df3f-4bb9-8dcc-dfac30ee0b41" />

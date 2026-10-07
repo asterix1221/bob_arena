@@ -200,3 +200,30 @@ TEST_CASE("ИГРА устойчивость: 20000 случайных дата�
     }
     REQUIRE(true);
 }
+
+TEST_CASE("ИГРА Roster: round-trip нескольких игроков с UTF-8 именами, requiresAck = 1") {
+    std::vector<RosterEntry> e = {{0, 1, 3, Bytes("Хост")}, {1, 2, 0, Bytes("bob")}, {2, 0, 2, {}}};
+    auto bytes = SerializeRoster(11, e);
+    auto h = ReadHeader(bytes.data(), bytes.size());
+    REQUIRE(h.has_value());
+    REQUIRE(h->requiresAck);
+    auto p = ParseRoster(bytes.data(), bytes.size());
+    REQUIRE(p.has_value());
+    REQUIRE(p->entries.size() == 3);
+    REQUIRE(p->entries[0].name == Bytes("Хост"));
+    REQUIRE(p->entries[0].flags == 3);
+    REQUIRE(p->entries[2].name.empty());
+}
+
+TEST_CASE("ИГРА Roster: пустой список допустим; усечённый, удлинённый и с неверным nameLen отклоняются") {
+    auto empty = SerializeRoster(1, {});
+    REQUIRE(ParseRoster(empty.data(), empty.size()).has_value());
+    auto bytes = SerializeRoster(1, {{0, 1, 0, Bytes("abc")}});
+    for (std::size_t cut = 0; cut < bytes.size(); ++cut) REQUIRE_FALSE(ParseRoster(bytes.data(), cut).has_value());
+    auto longer = bytes; longer.push_back(0);
+    REQUIRE_FALSE(ParseRoster(longer.data(), longer.size()).has_value());
+    auto bad = bytes; bad[kHeaderSize + 1 + 3] = 9; // nameLen
+    REQUIRE_FALSE(ParseRoster(bad.data(), bad.size()).has_value());
+    bytes[7] = 0; // requiresAck
+    REQUIRE_FALSE(ParseRoster(bytes.data(), bytes.size()).has_value());
+}

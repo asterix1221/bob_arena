@@ -93,6 +93,11 @@ func t_golden_build() -> void:
 	f = by["input"]["fields"];      check(_hex(Proto.input(f["seq"], f["first"], f["cmds"])) == by["input"]["hex"], "input")
 	f = by["snapshot"]["fields"];   check(_hex(Proto.snapshot(f["seq"], f["tick"], f["ack"], f["players"], PackedByteArray(f["owner"]), f["runes"])) == by["snapshot"]["hex"], "snapshot")
 	f = by["gameevent"]["fields"];  check(_hex(Proto.game_event(f["seq"], f["id"], f["kind"], f["tick"], f["a"], f["b"], f["x"], f["y"], f["v"])) == by["gameevent"]["hex"], "gameevent")
+	f = by["roster"]["fields"]
+	var ents := []
+	for e in f["entries"]:
+		ents.append([e[0], e[1], e[2], _from_hex(e[3])])
+	check(_hex(Proto.roster(f["seq"], ents)) == by["roster"]["hex"], "roster")
 	f = by["leave"]["fields"];      check(_hex(Proto.leave(f["seq"], f["reason"])) == by["leave"]["hex"], "leave")
 
 
@@ -108,6 +113,8 @@ func t_golden_parse() -> void:
 	check(m["tick"] == 1234 and m["ack"] == 4321 and m["players"][0] == [1, -300, 800, -1500, 2000, 100, 53, 1027] and m["players"][1][1] == 12345, "snapshot players")
 	check(m["owner"] == PackedByteArray([1, 2, 3, 4, 5]) and m["runes"][0] == [9, 3, -50, 600], "snapshot owner/runes")
 	m = Proto.parse(_from_hex(_vec("gameevent")["hex"])); check(m["id"] == 513 and m["v"] == -30 and m["x"] == -10, "gameevent")
+	m = Proto.parse(_from_hex(_vec("roster")["hex"]))
+	check(m["entries"].size() == 2 and m["entries"][0][3].get_string_from_utf8() == "Хо" and m["entries"][1][3].get_string_from_utf8() == "bob", "roster")
 	m = Proto.parse(_from_hex(_vec("leave")["hex"]));     check(m["reason"] == 2, "leave")
 
 
@@ -170,12 +177,13 @@ func t_strict() -> void:
 	var snap := Proto.snapshot(1, 0, 0, [], PackedByteArray(), []); snap[7] = 1
 	var ev := Proto.game_event(1, 1, 1, 1, 1, 1, 1, 1, 1);          ev[7] = 0
 	var lv := Proto.leave(1, 0);                                     lv[7] = 0
-	for pkt in [hello, inp, snap, ev, lv]:
+	var ro := Proto.roster(1, []);                                   ro[7] = 0
+	for pkt in [hello, inp, snap, ev, lv, ro]:
 		check(Proto.parse(pkt).is_empty(), "неверный requiresAck принят")
 	var bad_ver := Proto.ack(1, 1); bad_ver[5] = 0; bad_ver[6] = 3
 	check(Proto.parse(bad_ver).is_empty(), "чужая версия принята")
-	var bad_type := Proto.ack(1, 1); bad_type[0] = 12
-	check(Proto.parse(bad_type).is_empty(), "тип 12 принят")
+	var bad_type := Proto.ack(1, 1); bad_type[0] = 13
+	check(Proto.parse(bad_type).is_empty(), "тип 13 принят")
 	bad_type[0] = 0
 	check(Proto.parse(bad_type).is_empty(), "тип 0 принят")
 	var flag2 := Proto.ack(1, 1); flag2[7] = 2
@@ -189,6 +197,7 @@ func _all_samples() -> Array:
 		Proto.input(1, 5, [[1, 2], [3, 4]]),
 		Proto.snapshot(1, 1, 1, [[1, 1, 2, 3, 4, 5, 6, 7]], PackedByteArray([9, 9]), [[1, 1, 1, 1]]),
 		Proto.game_event(1, 1, 1, 1, 1, 1, 1, 1, 1), Proto.leave(1, 1),
+		Proto.roster(1, [[0, 1, 3, "ab".to_utf8_buffer()], [1, 2, 0, PackedByteArray()]]),
 	]
 
 
@@ -212,7 +221,7 @@ func t_fuzz() -> void:
 		for k in junk.size():
 			junk[k] = rng.randi() & 0xFF
 		if junk.size() >= 8 and i % 2 == 0:
-			junk[0] = 6 + rng.randi() % 6
+			junk[0] = 6 + rng.randi() % 7
 			junk[5] = 0
 			junk[6] = 2
 			junk[3] = 0

@@ -20,6 +20,7 @@ const T_INPUT := 8
 const T_SNAPSHOT := 9
 const T_GAME_EVENT := 10
 const T_LEAVE := 11
+const T_ROSTER := 12
 
 const MAX_NAME_BYTES := 16
 const MAX_INPUT_CMDS := 16
@@ -27,6 +28,7 @@ const MAX_SNAPSHOT_PLAYERS := 8
 const MAX_SNAPSHOT_RUNES := 8
 const MAX_OWNER_STATE := 96
 const GAME_EVENT_PAYLOAD := 13
+const MAX_ROSTER := 8
 
 const BTN_JUMP := 1
 const BTN_DASH := 2
@@ -60,7 +62,7 @@ static func read_header(d: PackedByteArray) -> Dictionary:
 	var psize := r.u16()
 	var version := r.u16()
 	var ra := r.u8()
-	if type < T_PING or type > T_LEAVE or version != VERSION or ra > 1:
+	if type < T_PING or type > T_ROSTER or version != VERSION or ra > 1:
 		return {}
 	return {"type": type, "seq": seq, "payload_size": psize, "requires_ack": ra == 1}
 
@@ -307,6 +309,48 @@ static func parse_leave(d: PackedByteArray) -> Dictionary:
 	return h.merged({"reason": d[HEADER_SIZE]})
 
 
+## entries: [[id, color, flags(бит0 хост, бит1 готов), name_utf8], ...]
+static func roster(seq: int, entries: Array) -> PackedByteArray:
+	var n := mini(entries.size(), MAX_ROSTER)
+	var payload := 1
+	for i in n:
+		payload += 4 + mini((entries[i][3] as PackedByteArray).size(), MAX_NAME_BYTES)
+	var b := _header(T_ROSTER, seq, payload, true)
+	Wire.w_u8(b, n)
+	for i in n:
+		var e: Array = entries[i]
+		var nm: PackedByteArray = e[3]
+		var len := mini(nm.size(), MAX_NAME_BYTES)
+		Wire.w_u8(b, e[0])
+		Wire.w_u8(b, e[1])
+		Wire.w_u8(b, e[2])
+		Wire.w_u8(b, len)
+		b.append_array(nm.slice(0, len))
+	return b
+
+
+static func parse_roster(d: PackedByteArray) -> Dictionary:
+	var h := _check(d, T_ROSTER, true)
+	if h.is_empty():
+		return {}
+	var r := Wire.Reader.new(d, HEADER_SIZE)
+	var n := r.u8()
+	if not r.ok or n > MAX_ROSTER:
+		return {}
+	var entries := []
+	for i in n:
+		var id := r.u8()
+		var color := r.u8()
+		var flags := r.u8()
+		var len := r.u8()
+		if not r.ok or len > MAX_NAME_BYTES or r.left() < len:
+			return {}
+		entries.append([id, color, flags, r.bytes(len)])
+	if not r.ok or r.left() != 0:
+		return {}
+	return h.merged({"entries": entries})
+
+
 ## Разбор по типу: {} при любой ошибке. Для Movement/Shoot — минимальный разбор (поля как в C++).
 static func parse(d: PackedByteArray) -> Dictionary:
 	var h := read_header(d)
@@ -322,4 +366,5 @@ static func parse(d: PackedByteArray) -> Dictionary:
 		T_SNAPSHOT: return parse_snapshot(d)
 		T_GAME_EVENT: return parse_game_event(d)
 		T_LEAVE: return parse_leave(d)
+		T_ROSTER: return parse_roster(d)
 		_: return h # Movement/Shoot: игре не нужны, достаточно валидного заголовка

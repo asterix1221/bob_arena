@@ -60,6 +60,8 @@ int main() {
 
     GameEventPacket e{}; e.eventId = 513; e.kind = 4; e.tick = 600; e.a = 1; e.b = 2; e.x = -10; e.y = 20; e.v = -30;
     Packet("gameevent", SerializeGameEvent(5, e), "{\"seq\": 5, \"id\": 513, \"kind\": 4, \"tick\": 600, \"a\": 1, \"b\": 2, \"x\": -10, \"y\": 20, \"v\": -30}");
+    std::vector<RosterEntry> roster = {{0, 1, 3, {0xD0, 0xA5, 0xD0, 0xBE}}, {1, 2, 0, {'b', 'o', 'b'}}};
+    Packet("roster", SerializeRoster(11, roster), "{\"seq\": 11, \"entries\": [[0, 1, 3, \"d0a5d0be\"], [1, 2, 0, \"626f62\"]]}");
     Packet("leave", SerializeLeave(3, 2), "{\"seq\": 3, \"reason\": 2}");
 
     std::printf("\n  ],\n");

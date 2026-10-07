@@ -141,7 +141,7 @@ std::optional<Header> ReadHeader(const std::uint8_t* data, std::size_t size) {
     if (!rawType || !seq || !payloadSize || !version || !rawRequiresAck) return std::nullopt;
 
     if (*rawType < static_cast<std::uint8_t>(PacketType::Ping) ||
-        *rawType > static_cast<std::uint8_t>(PacketType::Leave)) {
+        *rawType > static_cast<std::uint8_t>(PacketType::Roster)) {
         return std::nullopt; // неизвестный тип пакета
     }
     if (*version != kProtocolVersion) {
@@ -510,6 +510,53 @@ std::optional<LeavePacket> ParseLeave(const std::uint8_t* data, std::size_t size
     LeavePacket pkt;
     pkt.sequenceNumber = h->sequenceNumber;
     pkt.reason = data[kHeaderSize];
+    return pkt;
+}
+
+
+std::vector<std::uint8_t> SerializeRoster(std::uint16_t seq, const std::vector<RosterEntry>& entries) {
+    const std::size_t n = entries.size() > kMaxRoster ? kMaxRoster : entries.size();
+    std::size_t payload = 1;
+    for (std::size_t i = 0; i < n; ++i) {
+        payload += 4 + (entries[i].name.size() > kMaxNameBytes ? kMaxNameBytes : entries[i].name.size());
+    }
+    std::vector<std::uint8_t> out;
+    WriteHeaderFull(out, PacketType::Roster, seq, payload, true);
+    WriteU8(out, static_cast<std::uint8_t>(n));
+    for (std::size_t i = 0; i < n; ++i) {
+        const RosterEntry& e = entries[i];
+        const std::size_t len = e.name.size() > kMaxNameBytes ? kMaxNameBytes : e.name.size();
+        WriteU8(out, e.id);
+        WriteU8(out, e.color);
+        WriteU8(out, e.flags);
+        WriteU8(out, static_cast<std::uint8_t>(len));
+        out.insert(out.end(), e.name.begin(), e.name.begin() + static_cast<std::ptrdiff_t>(len));
+    }
+    return out;
+}
+
+std::optional<RosterPacket> ParseRoster(const std::uint8_t* data, std::size_t size) {
+    auto h = CheckGameHeader(data, size, PacketType::Roster, true);
+    if (!h) return std::nullopt;
+    const std::uint8_t* p = data + kHeaderSize;
+    const std::uint8_t* end = data + size;
+    auto n = ReadU8(p, end);
+    if (!n || *n > kMaxRoster) return std::nullopt;
+    RosterPacket pkt;
+    pkt.sequenceNumber = h->sequenceNumber;
+    for (std::uint8_t i = 0; i < *n; ++i) {
+        auto id = ReadU8(p, end);
+        auto color = ReadU8(p, end);
+        auto flags = ReadU8(p, end);
+        auto len = ReadU8(p, end);
+        if (!id || !color || !flags || !len || *len > kMaxNameBytes || end - p < *len) return std::nullopt;
+        RosterEntry e;
+        e.id = *id; e.color = *color; e.flags = *flags;
+        e.name.assign(p, p + *len);
+        p += *len;
+        pkt.entries.push_back(e);
+    }
+    if (p != end) return std::nullopt;
     return pkt;
 }
 

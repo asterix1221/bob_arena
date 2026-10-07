@@ -29,6 +29,10 @@ static func w_i16(b: PackedByteArray, v: int) -> void:
 	w_u16(b, v & 0xFFFF)
 
 
+static func w_i32(b: PackedByteArray, v: int) -> void:
+	w_u32(b, v & 0xFFFFFFFF)
+
+
 static func w_i8(b: PackedByteArray, v: int) -> void:
 	b.append(v & 0xFF)
 
@@ -79,6 +83,10 @@ class Reader extends RefCounted:
 			v = (v << 8) | data[pos + i]
 		pos += 8
 		return v
+
+	func i32() -> int:
+		var v := u32()
+		return v - 4294967296 if v >= 2147483648 else v
 
 	func i8() -> int:
 		var v := u8()

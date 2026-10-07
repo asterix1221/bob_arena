@@ -57,6 +57,7 @@ enum class PacketType : std::uint8_t {
     Snapshot  = 9,  // сервер -> клиент, ненадёжный: полное состояние мира
     GameEvent = 10, // сервер -> клиент, надёжный: попадание, подбор руны, смерть, начало/конец раунда
     Leave     = 11, // любая сторона, надёжный: выход из игры
+    Roster    = 12, // хост -> клиенты, надёжный: список игроков лобби (id, цвет, имя)
 };
 
 // Общий заголовок пакета (8 байт "на проводе"):
@@ -297,5 +298,18 @@ std::optional<InputPacket> ParseInput(const std::uint8_t* data, std::size_t size
 std::optional<SnapshotPacket> ParseSnapshot(const std::uint8_t* data, std::size_t size);
 std::optional<GameEventPacket> ParseGameEvent(const std::uint8_t* data, std::size_t size);
 std::optional<LeavePacket> ParseLeave(const std::uint8_t* data, std::size_t size);
+
+// ROSTER: count u8 (<= 8) | count x { id u8, color u8, flags u8 (бит0 хост, бит1 готов), nameLen u8, name[nameLen<=16] }
+constexpr std::size_t kMaxRoster = 8;
+struct RosterEntry {
+    std::uint8_t id, color, flags;
+    std::vector<std::uint8_t> name;
+};
+struct RosterPacket {
+    std::uint16_t sequenceNumber;
+    std::vector<RosterEntry> entries;
+};
+std::vector<std::uint8_t> SerializeRoster(std::uint16_t seq, const std::vector<RosterEntry>& entries);
+std::optional<RosterPacket> ParseRoster(const std::uint8_t* data, std::size_t size);
 
 } // namespace telemetry

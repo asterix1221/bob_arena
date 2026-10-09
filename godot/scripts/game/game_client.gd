@@ -175,6 +175,8 @@ func _on_message(_p: int, msg: Dictionary) -> void:
 			_on_snapshot(msg)
 		Proto.T_GAME_EVENT:
 			_on_event(msg)
+		Proto.T_LEAVE:
+			disconnected.emit("host_left")
 
 
 func _on_event(msg: Dictionary) -> void:

@@ -55,6 +55,10 @@ func _raw_poll() -> Array:
 	return out
 
 
+func local_port() -> int:
+	return _sock.get_local_port()
+
+
 func forget_peer(peer: int) -> void:
 	## После отключения: адрес освобождается, чтобы новый вход получил новый id.
 	if _addr_by_peer.has(peer):

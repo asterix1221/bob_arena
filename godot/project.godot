@@ -1,19 +1,31 @@
 ; Engine configuration file.
-; ПР №4 — Client-Side Prediction / Server Reconciliation на Godot 4.
+; Bob Arena: платформер-файтинг на собственном UDP-протоколе (ПР №1-4 + доработка игры).
 config_version=5
 
 [application]
 
-config/name="BobArenaPrediction"
-config/description="ПР №4: серверно-авторитетное движение, client-side prediction, reconciliation"
+config/name="BobArena"
+config/description="Платформер-файтинг: сервер-авторитет, client-side prediction, собственный UDP-протокол"
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.4")
+run/max_fps=0
 
 [display]
 
 window/size/viewport_width=1280
 window/size/viewport_height=720
+window/stretch/mode="canvas_items"
+window/stretch/aspect="keep"
+
+[input_devices]
+
+pointing/emulate_touch_from_mouse=false
 
 [physics]
 
-common/physics_ticks_per_second=60
+common/physics_ticks_per_second=120
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"

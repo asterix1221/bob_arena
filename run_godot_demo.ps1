@@ -29,12 +29,15 @@ $ErrorActionPreference = "Stop"
 $Proj = Join-Path $PSScriptRoot "godot"
 if (-not (Test-Path $Godot)) { Write-Error "Godot не найден: $Godot"; exit 1 }
 
-# Первый запуск: в чистой копии нет кэша Godot (godot\.godot). Без него класс-имена (class_name) неизвестны и скрипты не компилируются.
+# Импорт проекта при КАЖДОМ запуске (2-5 секунд). Godot без окна редактора не перестраивает реестр глобальных классов
+# (class_name): если в godot\.godot остался кэш от другой версии игры, скрипты не компилируются
+# («Could not find type "GameUI"», серый экран, тесты без результата). Импорт этот реестр обновляет.
+Write-Host "Импорт проекта Godot (обновление кэша .godot) ..."
+$importOut = & $Godot --headless --path $Proj --import 2>&1
 $cache = Join-Path $Proj ".godot\global_script_class_cache.cfg"
 if (-not (Test-Path $cache)) {
-    Write-Host "Первый запуск: импорт проекта Godot (создаётся кэш .godot) ..."
-    & $Godot --headless --path $Proj --import 2>&1 | Out-Null
-    if (-not (Test-Path $cache)) { Write-Error "Импорт не создал $cache"; exit 1 }
+    Write-Host ($importOut | Select-Object -Last 20 | Out-String)
+    Write-Error "Импорт не создал $cache"; exit 1
 }
 
 $preset = @{ none = 0; lag100 = 1; lag175loss4 = 2 }[$Profile]
@@ -51,7 +54,11 @@ switch ($Role) {
         foreach ($s in $suites) {
             $out = & $Godot --headless --path $Proj -s "res://tests/$s.gd" 2>&1
             $line = ($out | Select-String "тестов" | Select-Object -Last 1).Line
-            if (-not $line) { $line = "НЕТ РЕЗУЛЬТАТА (см. вывод Godot)"; $bad++ }
+            if (-not $line) {
+                $line = "НЕТ РЕЗУЛЬТАТА. Последние строки вывода Godot:"
+                $bad++
+                $out | Select-Object -Last 8 | ForEach-Object { Write-Host "    $_" }
+            }
             elseif ($line -notmatch ", 0 провалено") { $bad++ }
             "{0,-22} {1}" -f $s, $line
         }

@@ -1,8 +1,4 @@
-![Uploading serverclient.jpg…]()
-
-
-
-
+<img width="1280" height="1147" alt="photo_2026-10-26_10-56-30" src="https://github.com/user-attachments/assets/1e7dec6a-f060-4950-a821-c0f28278677f" />
 
 # Практическая работа №1 — UDP-протокол и архитектура
 

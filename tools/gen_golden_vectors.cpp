@@ -1,6 +1,6 @@
 // tools/gen_golden_vectors.cpp
 // Генерирует godot/tests/golden_vectors.json: эталонные байты пакетов и трассы поведения из C++-реализации
-// протокола ПР №2-3. Тесты GDScript (godot/tests/run_tests.gd) сверяют свою реализацию с этим файлом.
+// протокола ПР №2-3. Тесты GDScript (godot/tests/run_net_tests.gd) сверяют свою реализацию с этим файлом.
 // Сборка и запуск (из корня репозитория):
 //   g++ -std=c++17 protocol/protocol.cpp reliability/adaptive_timeout.cpp reliability/reliable_channel.cpp
 //       reliability/dedup_window.cpp tools/gen_golden_vectors.cpp -o gen_golden   (одной командой, без переноса)

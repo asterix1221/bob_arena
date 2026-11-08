@@ -1,0 +1,6 @@
+[SCN] T2 (100 мс, рывок БЕЗ предсказания) role=host preset=1 predict_dash=0 lag=100 jitter=0 loss=0.0
+[NET] LISTEN SERVER started on port 24802 (host plays as player 0)
+[NET] client joined t=1270
+[MATCH] playing t=4857
+[RESULT] role=host case=T2 remote_player_stats={ "dash_rejects": 0, "gap_fills": 349, "dups": 4664, "late": 0, "bad_inputs": 0 } tick=3303
+[SCN] exit done (0)

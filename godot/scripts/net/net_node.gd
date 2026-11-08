@@ -47,6 +47,9 @@ class Peer extends RefCounted:
 	var bytes_out := RateMeter.new()
 	var pkts_in := RateMeter.new()
 	var pkts_out := RateMeter.new()
+	var bytes_out_total := 0         # накопительно (ПР №5: профилировщик репликации), с учётом +28 байт IP/UDP
+	var pkts_out_total := 0
+	var bytes_in_total := 0
 	var retransmits := 0
 	var acks_ok := 0
 	var ack_time_sum_us := 0
@@ -140,6 +143,8 @@ func _transmit(p: Peer, raw: PackedByteArray) -> void:
 	var now := link.now_us()
 	p.bytes_out.add(raw.size() + 28, now)   # +28: IPv4 + UDP заголовки
 	p.pkts_out.add(1, now)
+	p.bytes_out_total += raw.size() + 28
+	p.pkts_out_total += 1
 	link.send(p.id, raw)
 
 
@@ -172,6 +177,7 @@ func _on_datagram(peer_id: int, data: PackedByteArray, now: int) -> void:
 	p.last_rx_us = now
 	p.bytes_in.add(data.size() + 28, now)
 	p.pkts_in.add(1, now)
+	p.bytes_in_total += data.size() + 28
 	var t: int = msg["type"]
 	if t == Proto.T_ACK:
 		var info := p.channel.on_ack(int(msg["acked"]), now)

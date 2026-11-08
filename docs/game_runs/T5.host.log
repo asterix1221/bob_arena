@@ -1,0 +1,9 @@
+[SCN] T5 (175±25 мс, 4% потерь, чит клиента (расхождение)) role=host preset=2 predict_dash=1 lag=175 jitter=25 loss=4.0
+[NET] LISTEN SERVER started on port 24805 (host plays as player 0)
+[NET] client joined t=977
+[MATCH] playing t=4573
+[DASH] SERVER REJECTED t=10335 player=1 reason=cooldown
+[DASH] SERVER REJECTED t=10742 player=1 reason=cooldown
+[DASH] SERVER REJECTED t=11543 player=1 reason=cooldown
+[RESULT] role=host case=T5 remote_player_stats={ "dash_rejects": 3, "gap_fills": 352, "dups": 6283, "late": 0, "bad_inputs": 0 } tick=3155
+[SCN] exit done (0)

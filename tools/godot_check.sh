@@ -6,7 +6,7 @@ set -euo pipefail
 GODOT="${GODOT:-godot}"
 "$GODOT" --headless --path godot --import >/dev/null 2>&1 || true
 rc=0
-for s in run_net_tests run_game_tests run_game_net_tests run_app_tests run_udp_tests; do
+for s in run_net_tests run_game_tests run_game_net_tests run_pred_tests run_view_tests run_app_tests run_udp_tests run_repl_tests; do
     line=$("$GODOT" --headless --path godot -s "res://tests/$s.gd" 2>&1 | grep "тестов" | tail -1 || true)
     printf '%-22s %s\n' "$s" "${line:-НЕТ РЕЗУЛЬТАТА}"
     case "$line" in *", 0 провалено"*) ;; *) rc=1 ;; esac

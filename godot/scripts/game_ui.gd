@@ -13,6 +13,14 @@ signal resume_requested
 signal quit_requested
 signal net_preset_changed(index: int)
 signal vsync_changed(index: int)
+signal predict_changed(on: bool)
+signal viz_changed(index: int)
+signal models_changed(sprites: bool)
+signal repl_open_requested(preset: String)      # ПР №5: открыть лабораторию репликации (preset: "baseline" | "optimized")
+signal repl_flag_changed(key: String, on: bool) # включить/выключить технику репликации
+signal repl_preset_changed(preset: String)
+signal repl_overlay_changed(key: String, on: bool)
+signal repl_measure_requested
 
 const NET_PRESETS := ["Без эмуляции", "100 мс, без потерь", "175±25 мс, 4% потерь"]
 const VSYNC_MODES := ["Выкл (меньше задержка)", "Вкл", "Адаптивная", "Mailbox (меньше задержка, без разрывов)"]
@@ -22,6 +30,7 @@ var lobby: Control
 var hud: Control
 var result: Control
 var disconnected: Control
+var lab: Control                    # ПР №5: экран лаборатории репликации (панель настроек справа)
 var pause: Control
 var countdown_label: Label
 var net_graph: NetGraph
@@ -31,7 +40,19 @@ var ip_edit: LineEdit
 var port_edit: LineEdit
 var selected_color := 0
 var preset_opt: OptionButton
+var _predict_opts: Array[OptionButton] = []    # одинаковые настройки в меню и в паузе
+var _viz_opts: Array[OptionButton] = []
+var _models_opts: Array[OptionButton] = []     # «Модели персонажей»: спрайты / фигуры
 var _swatches: Array[Button] = []
+var _repl_checks := {}                          # ключ техники/оверлея -> CheckButton (копии не нужны: панель одна)
+var _repl_start_opt: OptionButton               # в меню: с чего стартует лаборатория
+var _repl_preset_opt: OptionButton              # в лаборатории: «до» / «после» / свой набор
+var _repl_status: Label
+var lab_net_opt: OptionButton
+var repl_measure_btn: Button
+var repl_result: Control
+var repl_result_grid: GridContainer
+var repl_result_note: Label
 var menu_msg: Label
 var lobby_list: VBoxContainer
 var lobby_info: Label
@@ -68,6 +89,7 @@ func _ready() -> void:
 	_build_result(root)
 	_build_disconnected(root)
 	_build_pause(root)
+	_build_lab(root)
 	root.move_child(net_graph, -1)      # net_graph поверх всех экранов
 	show_only("menu")
 
@@ -143,6 +165,7 @@ func _screen(parent: Control, dim: float = 0.0) -> Control:
 func _build_menu(root: Control) -> void:
 	menu = _screen(root, 0.78)
 	var vb := _centered_panel(menu, 560)
+	vb.add_theme_constant_override("separation", 6)       # меню стало выше (строка ПР №5) — иначе кнопка «Выход» уходит за экран
 	var title := _label("BOB ARENA", 46, Color("ffd24a"))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(title)
@@ -212,15 +235,80 @@ func _build_menu(root: Control) -> void:
 	vs.item_selected.connect(func(i: int) -> void: vsync_changed.emit(i))
 	srow.add_child(vs)
 	vb.add_child(srow)
+	vb.add_child(_pred_settings_row(14))
+	var rrow := HBoxContainer.new()
+	rrow.add_theme_constant_override("separation", 8)
+	rrow.add_child(_label("Репликация (ПР №5):", 14))
+	_repl_start_opt = OptionButton.new()
+	_repl_start_opt.add_item("старт «после» (все оптимизации)")
+	_repl_start_opt.add_item("старт «до» (наивная)")
+	_repl_start_opt.focus_mode = Control.FOCUS_NONE
+	rrow.add_child(_repl_start_opt)
+	var lab_btn := _button("Лаборатория репликации", Color("6a4aa8"))
+	lab_btn.add_theme_font_size_override("font_size", 14)
+	lab_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lab_btn.pressed.connect(func() -> void: repl_open_requested.emit("optimized" if _repl_start_opt.selected == 0 else "baseline"))
+	rrow.add_child(lab_btn)
+	vb.add_child(rrow)
 	menu_msg = _label("", 14, Color("ff8a80"))
 	menu_msg.autowrap_mode = TextServer.AUTOWRAP_WORD
 	vb.add_child(menu_msg)
-	var help := _label("A/D или ←/→ — бег   W/Пробел — прыжок (S + прыжок — вниз)   Shift — рывок\nЛКМ — лёгкий удар, ПКМ — тяжёлый   H — здоровье   F3 — net_graph   Esc — пауза", 13, Color(0.65, 0.7, 0.8))
+	var help := _label("A/D или ←/→ — бег   W/Пробел — прыжок (S + прыжок — вниз)   Shift — рывок\nЛКМ — лёгкий удар, ПКМ — тяжёлый   H — здоровье   F3 — net_graph   Esc — пауза\nF4 — предсказание рывка   F8 — визуализация   F6 — спрайты/фигуры   «Лаборатория репликации» — настройки и замеры ПР №5", 13, Color(0.65, 0.7, 0.8))
 	help.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(help)
 	var quit := _button("Выход", Color("5a2f3a"))
 	quit.pressed.connect(func() -> void: quit_requested.emit())
 	vb.add_child(quit)
+
+
+## Две настройки ПР №4: предсказание рывка (вкл/выкл) и режим визуализации предсказания. Строка встраивается в меню и в паузу;
+## значения синхронизируются между копиями (sync_pred_settings), логики здесь нет — только сигналы.
+func _pred_settings_row(font_size: int) -> Control:
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 4)
+	var row1 := HBoxContainer.new()
+	row1.add_theme_constant_override("separation", 8)
+	row1.add_child(_label("Предсказание рывка:", font_size))
+	var po := OptionButton.new()
+	po.add_item("Вкл (сразу)")
+	po.add_item("Выкл (ждать сервер)")
+	po.focus_mode = Control.FOCUS_NONE
+	po.item_selected.connect(func(i: int) -> void: predict_changed.emit(i == 0))
+	row1.add_child(po)
+	box.add_child(row1)
+	var row2 := HBoxContainer.new()
+	row2.add_theme_constant_override("separation", 8)
+	row2.add_child(_label("Визуализация предсказания:", font_size))
+	var vo := OptionButton.new()
+	for n in PredViz.NAMES:
+		vo.add_item(n)
+	vo.focus_mode = Control.FOCUS_NONE
+	vo.item_selected.connect(func(i: int) -> void: viz_changed.emit(i))
+	row2.add_child(vo)
+	box.add_child(row2)
+	var row3 := HBoxContainer.new()
+	row3.add_theme_constant_override("separation", 8)
+	row3.add_child(_label("Модели персонажей:", font_size))
+	var mo := OptionButton.new()
+	mo.add_item("Спрайты")
+	mo.add_item("Фигуры (без картинок)")
+	mo.focus_mode = Control.FOCUS_NONE
+	mo.item_selected.connect(func(i: int) -> void: models_changed.emit(i == 0))
+	row3.add_child(mo)
+	box.add_child(row3)
+	_predict_opts.append(po)
+	_viz_opts.append(vo)
+	_models_opts.append(mo)
+	return box
+
+
+func sync_pred_settings(predict: bool, viz: int, sprites: bool = true) -> void:
+	for o in _models_opts:
+		o.select(0 if sprites else 1)
+	for o in _predict_opts:
+		o.select(0 if predict else 1)
+	for o in _viz_opts:
+		o.select(clampi(viz, 0, PredViz.NAMES.size() - 1))
 
 
 func _select_color(i: int) -> void:
@@ -480,6 +568,10 @@ func _build_pause(root: Control) -> void:
 	var r := _button("Продолжить", Color("2f7d4f"))
 	r.pressed.connect(func() -> void: resume_requested.emit())
 	vb.add_child(r)
+	vb.add_child(HSeparator.new())
+	vb.add_child(_label("Настройки предсказания (клиент)", 14, Color(0.75, 0.8, 0.9)))
+	vb.add_child(_pred_settings_row(13))
+	vb.add_child(_label("F4 — предсказание рывка, F8 — визуализация, F6 — модели", 12, Color(0.6, 0.65, 0.75)))
 	var l := _button("Выйти в меню", Color("5a2f3a"))
 	l.pressed.connect(func() -> void: leave_requested.emit())
 	vb.add_child(l)
@@ -492,4 +584,152 @@ func show_only(which: String) -> void:
 	result.visible = which == "result"
 	disconnected.visible = which == "disconnected"
 	pause.visible = which == "pause"
+	lab.visible = which == "lab"
 	hud.visible = which in ["game", "pause", "result"]
+
+
+# ------------------------------------------------------------------ ПР №5: лаборатория репликации (настройки и замер)
+
+## Правая панель: все семь техник репликации — переключатели, наборы «до»/«после», оверлеи, профиль сети, кнопка «Замер».
+## Логики репликации здесь нет: виджеты лишь испускают сигналы (App передаёт их в ReplLab), а sync_repl() выставляет их по состоянию лаборатории.
+func _build_lab(root: Control) -> void:
+	lab = Control.new()
+	lab.set_anchors_preset(Control.PRESET_FULL_RECT)
+	lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(lab)
+	var pc := PanelContainer.new()
+	pc.anchor_left = 1.0
+	pc.anchor_right = 1.0
+	pc.offset_left = -372.0
+	pc.offset_right = -8.0
+	pc.offset_top = 8.0
+	pc.add_theme_stylebox_override("panel", _panel("141a2eea"))
+	lab.add_child(pc)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 5)
+	pc.add_child(vb)
+	vb.add_child(_label("Настройки репликации (ПР №5)", 16, Color("ffd24a")))
+	var prow := HBoxContainer.new()
+	prow.add_theme_constant_override("separation", 6)
+	prow.add_child(_label("Набор:", 13))
+	_repl_preset_opt = OptionButton.new()
+	_repl_preset_opt.add_item("«До» — наивная (B)")
+	_repl_preset_opt.add_item("«После» — все семь (O)")
+	_repl_preset_opt.add_item("Свой набор")
+	_repl_preset_opt.focus_mode = Control.FOCUS_NONE
+	_repl_preset_opt.item_selected.connect(func(i: int) -> void:
+		if i == 0:
+			repl_preset_changed.emit("baseline")
+		elif i == 1:
+			repl_preset_changed.emit("optimized"))
+	prow.add_child(_repl_preset_opt)
+	vb.add_child(prow)
+	var hints := {
+		"relevancy": "Replication Graph: сетка + релевантность (1)",
+		"custom_relevance": "IsNetRelevantFor: направление, гистерезис (2)",
+		"dormancy": "Net Dormancy: статика спит (3)",
+		"push": "Push-based: только изменённые поля (4)",
+		"quantize": "Квантование позиций и скоростей (5)",
+		"freq": "NetUpdateFrequency по классам (6)",
+		"priority": "NetPriority + бюджет канала (7)",
+	}
+	for k in ReplCfg.TECH_KEYS:
+		var cb := CheckButton.new()
+		cb.text = hints[k]
+		cb.focus_mode = Control.FOCUS_NONE
+		cb.add_theme_font_size_override("font_size", 13)
+		cb.toggled.connect(func(on: bool) -> void: repl_flag_changed.emit(k, on))
+		vb.add_child(cb)
+		_repl_checks[k] = cb
+	vb.add_child(HSeparator.new())
+	vb.add_child(_label("Показывать", 13, Color(0.75, 0.8, 0.9)))
+	var ov := {"hud": "Панель статистики (H)", "minimap": "Мини-карта уровня (M)", "ghosts": "Серые контуры нереплицируемых (G)"}
+	for k in ov.keys():
+		var cb2 := CheckButton.new()
+		cb2.text = ov[k]
+		cb2.focus_mode = Control.FOCUS_NONE
+		cb2.add_theme_font_size_override("font_size", 13)
+		cb2.button_pressed = true
+		cb2.toggled.connect(func(on: bool) -> void: repl_overlay_changed.emit(k, on))
+		vb.add_child(cb2)
+		_repl_checks["ov_" + k] = cb2
+	var nrow := HBoxContainer.new()
+	nrow.add_theme_constant_override("separation", 6)
+	nrow.add_child(_label("Сеть:", 13))
+	lab_net_opt = OptionButton.new()
+	for p in NET_PRESETS:
+		lab_net_opt.add_item(p)
+	lab_net_opt.focus_mode = Control.FOCUS_NONE
+	lab_net_opt.item_selected.connect(func(i: int) -> void: net_preset_changed.emit(i))
+	nrow.add_child(lab_net_opt)
+	vb.add_child(nrow)
+	_repl_status = _label("", 12, Color(0.65, 0.7, 0.8))
+	_repl_status.autowrap_mode = TextServer.AUTOWRAP_WORD
+	vb.add_child(_repl_status)
+	repl_measure_btn = _button("Замер «до/после» (≈ 10 с)", Color("2f7d4f"))
+	repl_measure_btn.add_theme_font_size_override("font_size", 14)
+	repl_measure_btn.pressed.connect(func() -> void:
+		repl_measure_btn.disabled = true
+		repl_measure_btn.text = "Идёт замер…"
+		repl_measure_requested.emit())
+	vb.add_child(repl_measure_btn)
+	var back := _button("Выйти в меню (Esc)", Color("5a2f3a"))
+	back.add_theme_font_size_override("font_size", 14)
+	back.pressed.connect(func() -> void: leave_requested.emit())
+	vb.add_child(back)
+	_build_repl_result(lab)
+
+
+func _build_repl_result(parent: Control) -> void:
+	repl_result = _screen(parent, 0.55)
+	repl_result.visible = false
+	var vb := _centered_panel(repl_result, 760)
+	vb.add_child(_label("Результат замера: исходящий трафик сервера", 20, Color("ffd24a")))
+	repl_result_grid = GridContainer.new()
+	repl_result_grid.columns = 5
+	repl_result_grid.add_theme_constant_override("h_separation", 18)
+	repl_result_grid.add_theme_constant_override("v_separation", 4)
+	vb.add_child(repl_result_grid)
+	repl_result_note = _label("", 13, Color(0.75, 0.8, 0.9))
+	repl_result_note.autowrap_mode = TextServer.AUTOWRAP_WORD
+	vb.add_child(repl_result_note)
+	var close := _button("Закрыть", Color("3b4a7a"))
+	close.pressed.connect(func() -> void: repl_result.visible = false)
+	vb.add_child(close)
+
+
+## Показывает таблицу замера (ReplLab.measure_done). rows: [{label,kb_s,less_pct,known,err,missing,key,active}]
+func show_repl_measure(res: Dictionary) -> void:
+	repl_measure_btn.disabled = false
+	repl_measure_btn.text = "Замер «до/после» (≈ 10 с)"
+	for c in repl_result_grid.get_children():
+		c.queue_free()
+	for h in ["Набор", "КБ/с (3 клиента)", "Снижение", "Акторов у клиента", "Ошибка вида, px"]:
+		repl_result_grid.add_child(_label(h, 13, Color(0.7, 0.78, 0.95)))
+	for r in res["rows"]:
+		var hi: bool = r["key"] in ["baseline", "optimized", "current"]
+		var col := Color("ffd479") if r["key"] == "optimized" else (Color(0.95, 0.95, 1.0) if hi else Color(0.8, 0.84, 0.92))
+		var less := "—" if r["key"] == "baseline" else "−%.1f%%" % r["less_pct"]
+		var vals := [r["label"], "%.1f" % r["kb_s"], less, "%.1f из %d" % [r["known"], res["actors"]], "%.2f" % r["err"]]
+		for v in vals:
+			repl_result_grid.add_child(_label(str(v), 14, col))
+	var same: bool = res["same_checksum"]
+	repl_result_note.text = "Один и тот же сценарий (%d с игры, seed 7, 3 клиента, виртуальное время): контрольная сумма состояния мира %s — разница только от сетевых настроек. Полный профиль на 30 с, вклад каждой техники и графики — docs/Replication_Optimization.md." % [res["seconds"], "совпала во всех прогонах (%d)" % res["checksum"] if same else "РАЗОШЛАСЬ (ошибка!)"]
+	repl_result.visible = true
+
+
+## Выставляет виджеты по состоянию лаборатории (без повторных сигналов).
+func sync_repl(cfg: ReplCfg, overlays: Dictionary) -> void:
+	for k in ReplCfg.TECH_KEYS:
+		(_repl_checks[k] as CheckButton).set_pressed_no_signal(cfg.get_flag(k))
+	for k in overlays.keys():
+		if _repl_checks.has("ov_" + k):
+			(_repl_checks["ov_" + k] as CheckButton).set_pressed_no_signal(overlays[k])
+	var n := cfg.active().size()
+	_repl_preset_opt.select(0 if n == 0 else (1 if n == ReplCfg.TECH_KEYS.size() else 2))
+	_repl_status.text = "Включено техник: %d из 7. Пакеты WorldUpdate/WorldReliable, формат — docs/Protocol_Specification.md." % n
+
+
+func sync_net_preset(i: int) -> void:
+	preset_opt.select(clampi(i, 0, 2))
+	lab_net_opt.select(clampi(i, 0, 2))

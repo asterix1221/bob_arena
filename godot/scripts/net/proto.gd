@@ -21,6 +21,8 @@ const T_SNAPSHOT := 9
 const T_GAME_EVENT := 10
 const T_LEAVE := 11
 const T_ROSTER := 12
+const T_WORLD_UPDATE := 13      # ПР №5: непрерывное состояние мировых акторов (Unreliable), см. ReplCodec
+const T_WORLD_RELIABLE := 14    # ПР №5: появление/полное состояние/удаление акторов (Reliable)
 
 const MAX_NAME_BYTES := 16
 const MAX_INPUT_CMDS := 16
@@ -62,7 +64,7 @@ static func read_header(d: PackedByteArray) -> Dictionary:
 	var psize := r.u16()
 	var version := r.u16()
 	var ra := r.u8()
-	if type < T_PING or type > T_ROSTER or version != VERSION or ra > 1:
+	if type < T_PING or type > T_WORLD_RELIABLE or version != VERSION or ra > 1:
 		return {}
 	return {"type": type, "seq": seq, "payload_size": psize, "requires_ack": ra == 1}
 
@@ -367,4 +369,6 @@ static func parse(d: PackedByteArray) -> Dictionary:
 		T_GAME_EVENT: return parse_game_event(d)
 		T_LEAVE: return parse_leave(d)
 		T_ROSTER: return parse_roster(d)
+		T_WORLD_UPDATE: return ReplCodec.parse_update(d)
+		T_WORLD_RELIABLE: return ReplCodec.parse_reliable(d)
 		_: return h # Movement/Shoot: игре не нужны, достаточно валидного заголовка

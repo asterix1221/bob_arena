@@ -54,6 +54,7 @@ func _initialize() -> void:
 	await run("меню -> тренировка с ботом -> матч -> победа -> реванш -> меню", t_solo)
 	await run("два приложения: хост и клиент по UDP, матч, итоги, выход клиента", t_two_apps)
 	await run("переключатели: H (здоровье), F3 (net_graph), Esc (пауза)", t_toggles)
+	await run("настройки предсказания: F4/F8, меню и пауза синхронны, клиент получает настройку, net_graph показывает отклик", t_pred_settings)
 	print("\n%d тестов, %d провалено" % [passed + failed, failed])
 	quit(1 if failed > 0 else 0)
 
@@ -148,4 +149,56 @@ func t_toggles() -> void:
 	check(app.screen == "game", "Esc снова — продолжить")
 	app.leave_to_menu()
 	app.queue_free()
+	await process_frame
+
+
+func t_pred_settings() -> void:
+	var a := _new_app()
+	var b := _new_app()
+	await process_frame
+	check(a.predict_dash and a.viz_mode == PredViz.GHOST, "по умолчанию: предсказание вкл, визуализация «призрак»")
+	check(a.ui._predict_opts.size() == 2 and a.ui._viz_opts.size() == 2, "настройки есть и в меню, и в паузе")
+	# F8 по кругу, F4 переключает; обе копии настроек в UI синхронны
+	_key(b, KEY_F8, true)
+	check(b.viz_mode == (PredViz.GHOST + 1) % PredViz.NAMES.size() and b.ui._viz_opts[0].selected == b.viz_mode and b.ui._viz_opts[1].selected == b.viz_mode, "F8 меняет режим и обновляет меню/паузу")
+	for i in PredViz.NAMES.size():
+		_key(b, KEY_F8, true)
+	check(b.viz_mode == (PredViz.GHOST + 1) % PredViz.NAMES.size(), "полный круг F8 возвращает режим")
+	_key(b, KEY_F4, true)
+	check(not b.predict_dash and b.ui._predict_opts[0].selected == 1 and b.ui._predict_opts[1].selected == 1, "F4 выключает предсказание рывка и обновляет UI")
+	_key(b, KEY_F4, true)
+	check(b.predict_dash, "F4 включает снова")
+	# через UI-сигнал
+	b.ui.viz_changed.emit(PredViz.FULL)
+	b.ui.predict_changed.emit(false)
+	check(b.viz_mode == PredViz.FULL and not b.predict_dash, "сигналы настроек доходят до App")
+	# хост + клиент по UDP: настройка попадает в GameClient, переключается на лету, отклик рывка виден в net_graph
+	a.start_host("Х", 0, 24911, false)
+	b.start_join("К", 1, "127.0.0.1", 24911)
+	await _wait_until(func() -> bool: return a.host.slots.size() == 2 and b.client != null and b.client.my_id >= 0, 5.0)
+	check(b.client != null and not b.client.predict_dash, "клиент создан с выключенным предсказанием (настройка применена)")
+	_key(b, KEY_F4, true)
+	check(b.client.predict_dash, "F4 переключает предсказание у работающего клиента")
+	a.host.start_match()
+	await _wait_until(func() -> bool: return b.client.phase == GC.PHASE_PLAYING, 8.0)
+	b.screen = "game"
+	b.ui.show_only("game")
+	var dash := InputEventKey.new()
+	dash.physical_keycode = KEY_SHIFT
+	dash.keycode = KEY_SHIFT
+	dash.pressed = true
+	b.input.handle(dash, Time.get_ticks_usec())
+	await _wait_until(func() -> bool: return b.client.dash_accepted + b.client.dash_denied > 0, 4.0)
+	check(b.client.dash_accepted == 1 and b.client.local_response_ms.size() == 1, "рывок принят сервером, отклик измерен")
+	_key(b, KEY_F3, true)
+	await _wait(0.4)
+	var has_row := false
+	for r in b.ui.net_graph.report.get("rows", []):
+		if String(r[0]).begins_with("Предсказание рывка"):
+			has_row = true
+	check(has_row, "в net_graph есть строки про рывок и предсказание")
+	b.leave_to_menu()
+	a.leave_to_menu()
+	a.queue_free()
+	b.queue_free()
 	await process_frame

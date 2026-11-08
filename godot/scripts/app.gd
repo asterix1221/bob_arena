@@ -6,7 +6,9 @@ extends Node2D
 ## и бота-клиента в этом же процессе (по реальному UDP на localhost).
 ##
 ## Параметры запуска (после --): --debug (читы F9-F11), --shots=<каталог> (автоскриншоты экранов),
-## --lag-test (замер инпутлага), --host / --join=<ip> --port=<порт> --name=<имя> (прямой запуск).
+## --lag-test (замер инпутлага), --host / --join=<ip> --port=<порт> --name=<имя> (прямой запуск),
+## --predict=0|1 (предсказание рывка у клиента, F4), --viz=0..3 (визуализация предсказания, F8), --sprites=0|1 (спрайты/фигуры, F6),
+## --scenario=T1..T5 [--out=<лог>] (автоматический сценарий ПР №4: хост + бот-клиент, лог и итоги).
 
 const DEFAULT_PORT := 24680
 
@@ -15,9 +17,14 @@ var view: ArenaView
 var screen := "menu"
 var mode := ""                      # "", "host", "client"
 var link: UdpLink
+var vhub: LoopHub = null            # виртуальный сеанс (start_virtual): хаб, хост и ссылки
+var vhost: GameHost = null
+var vhost_link: LoopLink = null
+var vhost_id := -1
 var net: NetNode
 var host: GameHost
 var client: GameClient
+var lab: ReplLab = null              # ПР №5: лаборатория репликации (экран "lab")
 var bots: Array = []                # [{link, net, client, brain}]
 var my_id := -1
 var input := InputLatch.new()
@@ -32,6 +39,11 @@ var render_offset := Vector2.ZERO   # сглаживание коррекций 
 var results := {}                   # id -> {kills, damage, secs, died}
 var winner := GC.NO_PLAYER
 var cheat_no_rules := false
+var predict_dash := true            # ПР №4: рывок предсказывается клиентом сразу (false — ждёт ответа сервера); F4
+var viz_mode := PredViz.GHOST       # визуализация предсказания (PredViz.*); F8
+var viz_flash_t0_ms := -1.0         # момент последней коррекции своего персонажа (красное кольцо)
+var viz_flash_pos := Vector2.ZERO
+var autoplay: ScenarioBrain = null   # сценарий ПР №4: вместо клавиатуры клиентом управляет скрипт
 var ticks_last_frame := 0
 var fps_smooth := 0.0
 var frame_ms := 0.0
@@ -69,18 +81,48 @@ func _ready() -> void:
 	ui.resume_requested.connect(func() -> void: set_pause(false))
 	ui.quit_requested.connect(func() -> void: get_tree().quit())
 	ui.net_preset_changed.connect(set_net_preset)
+	ui.predict_changed.connect(set_predict_dash)
+	ui.viz_changed.connect(set_viz_mode)
+	ui.models_changed.connect(set_sprites)
 	ui.vsync_changed.connect(set_vsync)
+	ui.repl_open_requested.connect(start_lab)
+	ui.repl_flag_changed.connect(func(k: String, on: bool) -> void:
+		if lab != null:
+			lab.set_flag(k, on))
+	ui.repl_preset_changed.connect(func(p: String) -> void:
+		if lab != null:
+			lab.apply_preset_name(p))
+	ui.repl_overlay_changed.connect(func(k: String, on: bool) -> void:
+		if lab != null:
+			lab.set_overlay(k, on))
+	ui.repl_measure_requested.connect(func() -> void:
+		if lab != null:
+			lab.run_measure(10))
 	RenderingServer.frame_post_draw.connect(func() -> void: lag_meter.on_frame_drawn(Time.get_ticks_usec()))
 	set_vsync(3)
 	if _args.has("preset"):
 		set_net_preset(int(_args["preset"]))
 		ui.preset_opt.select(clampi(int(_args["preset"]), 0, 2))
+	if _args.has("predict"):
+		predict_dash = String(_args["predict"]) != "0"
+	if _args.has("viz"):
+		viz_mode = clampi(int(_args["viz"]), 0, PredViz.NAMES.size() - 1)
+	if _args.has("sprites"):
+		Sprites.enabled = String(_args["sprites"]) != "0"
+	ui.sync_pred_settings(predict_dash, viz_mode, Sprites.enabled)
 	ui.show_only("menu")
 	if _args.has("shots"):
 		_shots = Shots.new()
 		_shots.app = self
 		add_child(_shots)
 		_shots.run(String(_args["shots"]))
+	elif _args.has("scenario"):
+		var scn := Scenario.new()
+		scn.app = self
+		add_child(scn)
+		scn.run(String(_args["scenario"]))
+	elif _args.has("lab"):
+		start_lab(String(_args.get("repl", "optimized")), String(_args.get("repl-shot", "")))
 	elif _args.has("host"):
 		start_host(String(_args.get("name", "Игрок")), int(_args.get("color", 0)), int(_args.get("port", DEFAULT_PORT)), _args.has("bot"))
 	elif _args.has("join"):
@@ -145,6 +187,17 @@ func start_join(player_name: String, color: int, ip: String, port: int) -> void:
 	net = NetNode.new(link)
 	net.add_peer(1)
 	client = GameClient.new(net, 1)
+	_attach_client()
+	mode = "client"
+	client.join(_clean_name(player_name), color)
+	_join_deadline = Time.get_ticks_msec() + 5000
+	ui.set_menu_message("Подключение к %s:%d …" % [ip, port])
+
+
+## Общая настройка клиента (обычного и виртуального): настройки ПР №4 и подписка на сигналы.
+func _attach_client() -> void:
+	client.predict_dash = predict_dash
+	client.dash_resolved.connect(_on_dash_resolved)
 	client.connected.connect(func(id: int) -> void:
 		my_id = id
 		_join_deadline = -1
@@ -155,10 +208,27 @@ func start_join(player_name: String, color: int, ip: String, port: int) -> void:
 	client.roster_changed.connect(_refresh_lobby)
 	client.phase_changed.connect(_on_phase)
 	client.correction.connect(_on_correction)
+
+
+## ВИРТУАЛЬНЫЙ сеанс для воспроизводимой записи видео/скриншотов (ПР №4): хост-игрок (стоит) и клиент в одном процессе поверх
+## LoopHub — виртуальное время, без сокетов, поэтому результат не зависит от скорости рендеринга и загрузки процессора.
+## Та же серверная и клиентская логика (GameHost/GameClient), что и по UDP; эмуляция сети — на датаграммах обеих сторон.
+func start_virtual(preset_index: int) -> void:
+	_close_session()
+	preset = preset_index
+	vhub = LoopHub.new()
+	vhost_link = LoopLink.new(vhub, 1)
+	var cl := LoopLink.new(vhub, 2)
+	_apply_emulation(vhost_link)
+	_apply_emulation(cl)
+	vhost = GameHost.new(NetNode.new(vhost_link), 7)
+	vhost_id = vhost.add_local_player("Хост", 0)
+	net = NetNode.new(cl)
+	net.add_peer(vhost_link.link_id)
+	client = GameClient.new(net, vhost_link.link_id)
+	_attach_client()
 	mode = "client"
-	client.join(_clean_name(player_name), color)
-	_join_deadline = Time.get_ticks_msec() + 5000
-	ui.set_menu_message("Подключение к %s:%d …" % [ip, port])
+	client.join("Клиент", 1)
 
 
 func _clean_name(n: String) -> String:
@@ -181,6 +251,9 @@ func _close_session() -> void:
 	net = null
 	host = null
 	client = null
+	vhub = null
+	vhost = null
+	vhost_link = null
 	mode = ""
 	my_id = -1
 	results.clear()
@@ -198,6 +271,7 @@ func _close_session() -> void:
 
 func leave_to_menu() -> void:
 	_close_session()
+	_close_lab()
 	screen = "menu"
 	ui.set_menu_message("")
 	ui.show_only("menu")
@@ -243,12 +317,44 @@ func _on_disconnected(reason: String) -> void:
 func _on_correction(err_px: float, _replayed: int) -> void:
 	if client == null:
 		return
+	viz_flash_t0_ms = float(Time.get_ticks_msec())     # красное кольцо визуализации предсказания
+	viz_flash_pos = _own_shown
 	if err_px < 120.0:
 		# физика уже исправлена; визуально плавно «подтягиваем» персонажа из того места, где он был нарисован
 		var new_pos := Vector2(client.state.x, client.state.y) / float(GC.SUB)
 		render_offset = (_own_shown - new_pos).limit_length(120.0)
 	else:
 		render_offset = Vector2.ZERO
+
+
+## Сервер разрешил нажатие рывка. local_ms — через сколько после нажатия рывок появился на экране (с предсказанием ≈ 0,
+## без — ≈ RTT), confirm_ms — когда пришло подтверждение сервера.
+func _on_dash_resolved(accepted: bool, local_ms: float, confirm_ms: float, _hint: String) -> void:
+	if accepted:
+		ui.add_feed("Рывок: экран %.0f мс, сервер %.0f мс" % [local_ms, confirm_ms], Color("9fe870"))
+	else:
+		ui.add_feed("Рывок ОТКЛОНЁН сервером (%.0f мс)" % confirm_ms, Color("ffb86b"))
+
+
+## Предсказание рывка вкл/выкл (F4 или настройка). Без предсказания рывок на экране появляется только после ответа сервера.
+func set_predict_dash(on: bool) -> void:
+	predict_dash = on
+	if client != null:
+		client.predict_dash = on
+	if _args.has("sprites"):
+		Sprites.enabled = String(_args["sprites"]) != "0"
+	ui.sync_pred_settings(predict_dash, viz_mode, Sprites.enabled)
+
+
+## Спрайты (пиксель-арт из assets/sprites) или прежние нарисованные фигуры (F6 или настройка «Модели персонажей»).
+func set_sprites(on: bool) -> void:
+	Sprites.enabled = on
+	ui.sync_pred_settings(predict_dash, viz_mode, Sprites.enabled)
+
+
+func set_viz_mode(i: int) -> void:
+	viz_mode = clampi(i, 0, PredViz.NAMES.size() - 1)
+	ui.sync_pred_settings(predict_dash, viz_mode, Sprites.enabled)
 
 
 # ------------------------------------------------------------------ кнопки лобби / итогов
@@ -263,6 +369,32 @@ func _on_rematch_pressed() -> void:
 		host.rematch()
 
 
+## ПР №5: открыть лабораторию репликации (меню «Репликация (ПР №5)»). Профиль сети из настроек применяется к её каналам.
+func start_lab(preset_name: String, shot_path: String = "") -> void:
+	_close_session()
+	_close_lab()
+	view.visible = false
+	lab = ReplLab.new()
+	lab.shot_path = shot_path
+	add_child(lab)
+	lab.cfg_changed.connect(func() -> void: ui.sync_repl(lab.cfg, lab.overlays))
+	lab.measure_done.connect(ui.show_repl_measure)
+	lab.start(preset_name, 3, preset)
+	screen = "lab"
+	ui.show_only("lab")
+	ui.sync_repl(lab.cfg, lab.overlays)
+	ui.sync_net_preset(preset)
+
+
+func _close_lab() -> void:
+	if lab != null:
+		lab.queue_free()
+		lab = null
+	view.visible = true
+	if ui != null and ui.repl_result != null:
+		ui.repl_result.visible = false
+
+
 func set_pause(on: bool) -> void:
 	if screen not in ["game", "pause"]:
 		return
@@ -273,6 +405,10 @@ func set_pause(on: bool) -> void:
 
 func set_net_preset(i: int) -> void:
 	preset = i
+	if lab != null:
+		lab.apply_net_preset(i)
+	if ui != null and ui.lab_net_opt != null:
+		ui.sync_net_preset(i)
 	_apply_emulation(link)
 	for b in bots:
 		_apply_emulation(b["link"])
@@ -430,6 +566,8 @@ func _input(event: InputEvent) -> void:
 					set_pause(true)
 				elif screen == "pause":
 					set_pause(false)
+				elif screen == "lab":
+					leave_to_menu()
 			KEY_H:
 				if not typing:
 					show_hp = not show_hp
@@ -437,6 +575,18 @@ func _input(event: InputEvent) -> void:
 			KEY_F3:
 				show_graph = not show_graph
 				ui.net_graph.visible = show_graph
+			KEY_F4:
+				if not typing:
+					set_predict_dash(not predict_dash)
+					ui.add_feed("Предсказание рывка: %s" % ("ВКЛ" if predict_dash else "ВЫКЛ (ждём ответа сервера)"), Color("7aa2ff"))
+			KEY_F6:
+				if not typing:
+					set_sprites(not Sprites.enabled)
+					ui.add_feed("Модели персонажей: %s" % ("спрайты" if Sprites.enabled else "фигуры"), Color("7aa2ff"))
+			KEY_F8:
+				if not typing:
+					set_viz_mode((viz_mode + 1) % PredViz.NAMES.size())
+					ui.add_feed("Визуализация предсказания: %s" % PredViz.NAMES[viz_mode], Color("7aa2ff"))
 			KEY_F9:
 				if debug and client != null and client.state.alive:
 					client.state.x += 300 * GC.SUB      # «читер» телепортирует себя: сервер вернёт на место
@@ -501,10 +651,21 @@ func _sim_tick() -> void:
 			b["client"].local_tick(bc[0], bc[1])
 		host.tick_once()
 	elif mode == "client" and client != null:
-		if cheat_no_rules and client.state.alive:
-			client.state.dash_cd = 0
-			client.state.stamina = GC.STAMINA_MAX
-		client.local_tick(cmd[0], cmd[1])
+		if vhub != null:
+			vhub.advance_us(8333)                      # один тик виртуального времени (1/120 с)
+			net.process()
+		if autoplay != null:
+			var ab: Array = autoplay.think(client)      # скрипт сценария ПР №4 вместо клавиатуры (он же включает чит у клиента)
+			cmd = [ab[0], ab[1], []]
+		else:
+			client.cheat_no_rules = cheat_no_rules        # чит применяется внутри клиента перед каждым локальным шагом
+		var press_us := 0
+		if (int(cmd[1]) & Proto.BTN_DASH) != 0 and not (cmd[2] as Array).is_empty():
+			press_us = int(cmd[2][0])                  # момент нажатия клавиши (для замера отклика)
+		client.local_tick(cmd[0], cmd[1], press_us)
+		if vhub != null:
+			vhost.host_input(vhost_id, 0, 0)
+			vhost.tick_once()
 	lag_meter.on_tick(cmd[2], Time.get_ticks_usec())
 
 
@@ -663,6 +824,10 @@ func _net_report() -> Dictionary:
 			["Коррекций в с / всего", "%d / %d" % [rates["corrections_s"], client.corrections], _sev(rates["corrections_s"], 1, 4)],
 			["Ошибка: последняя / макс", "%.1f / %.1f px" % [client.last_error_px, client.max_error_px], _sev(client.last_error_px, 4, 30)],
 			["Рывков отклонено локально", "%d" % client.local_dash_rejects, 0],
+			["Предсказание рывка (F4)", "ВКЛ" if client.predict_dash else "ВЫКЛ — ждём сервер", 0],
+			["Рывок: на экране (последний/сред)", _ms_pair(client.local_response_ms), 0],
+			["Рывок: подтверждение сервера", _ms_pair(client.confirm_response_ms), 0],
+			["Рывков принято / отклонено сервером", "%d / %d" % [client.dash_accepted, client.dash_denied], 0],
 			["#", "Ввод и кадр (программная часть)"],
 			["Нажатие → тик (сред/макс)", "%.1f / %.1f мс" % [lag["tick_avg"], lag["tick_max"]], _sev(lag["tick_avg"], 8, 17)],
 			["Нажатие → кадр (сред/макс)", "%.1f / %.1f мс" % [lag["draw_avg"], lag["draw_max"]], _sev(lag["draw_avg"], 20, 40)],
@@ -713,3 +878,12 @@ func _net_report() -> Dictionary:
 			_graph("Худшие потери, %", "loss", "%.1f" % worst_loss, 20.0, 2.0, 8.0),
 		]}
 	return {}
+
+
+func _ms_pair(a: Array) -> String:
+	if a.is_empty():
+		return "—"
+	var sum := 0.0
+	for v in a:
+		sum += float(v)
+	return "%.0f / %.0f мс" % [float(a.back()), sum / float(a.size())]

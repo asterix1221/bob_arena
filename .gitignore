@@ -17,16 +17,12 @@ reliable_server_app
 # логи серверов надёжной доставки нужны для сверки в analysis/analyze_reliability.py
 !docs/server_rel_*.log
 
-# ПР №4: Unreal Engine (генерируется при сборке/открытии проекта)
-/Binaries/
-/Intermediate/
-/Saved/
-/DerivedDataCache/
-/.vs/
-*.sln
-*.suo
-*.VC.db
-/Source/compile_commands.json
-
-# ПР №4 (Godot): кэш редактора (пересоздаётся при открытии проекта)
+# Godot: кэш редактора и служебные файлы импорта (пересоздаются при открытии проекта).
+# Открывать в редакторе нужно папку godot/, а не корень репозитория: иначе Godot создаёт project.godot,
+# icon.svg и *.import рядом с картинками в docs/.
 /godot/.godot/
+/.godot/
+/project.godot
+/icon.svg
+/icon.svg.import
+*.import

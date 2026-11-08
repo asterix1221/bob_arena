@@ -14,11 +14,17 @@ signal event(kind: int, a: int, b: int, x: int, y: int, v: int)
 signal roster_changed
 signal phase_changed(phase: int)
 signal correction(error_px: float, replayed: int)
+## Рывок «нажат → решение сервера получено». accepted — сервер принял; local_ms — через сколько после нажатия рывок
+## стал виден на экране клиента (≈0 с предсказанием, ≈RTT без него); confirm_ms — когда пришло подтверждение сервера.
+## Игрок нажал рывок (команда с номером seq создана; клиент её уже отправляет/применяет по настройкам предсказания).
+signal dash_pressed(seq: int)
+signal dash_resolved(accepted: bool, local_ms: float, confirm_ms: float, reason_hint: String)
 
 const SEND_EVERY := 2
 const REDUNDANCY := 10
 const MAX_PENDING := 600
 const SNAP_TELEPORT_PX := 120.0
+const MAX_DASH_MARKS := 16
 
 var net: NetNode
 var peer := 1
@@ -33,6 +39,19 @@ var results := {}                      # id -> {kills, damage, secs, died} по�
 var winner := GC.NO_PLAYER
 var seed_value := 0
 var tick_rate := GC.TICK_HZ
+
+# --- ПР №4: настройки предсказания рывка и наблюдение ---
+## true — рывок исполняется у клиента сразу (CSP); false — клиент шлёт ввод, но рывок на экране появляется только
+## после ответа сервера (вариант «без предсказания»; ходьба/прыжок предсказываются в обоих режимах).
+var predict_dash := true
+## Намеренный чит (для демонстрации коррекции): клиент локально игнорирует кулдаун и выносливость рывка.
+var cheat_no_rules := false
+var last_server_state: PState = null   # последнее АВТОРИТЕТНОЕ состояние (на момент last_ack) — «призрак» для визуализации
+var local_response_ms: Array[float] = []     # нажатие рывка -> рывок виден у клиента
+var confirm_response_ms: Array[float] = []   # нажатие рывка -> подтверждение сервера
+var dash_accepted := 0
+var dash_denied := 0
+var _dash_marks: Array = []                  # [{seq, press_us, local_us}] ещё не разрешённые нажатия рывка
 
 var cmd_seq := 0
 var pending: Array = []                # [[seq, axis, buttons]] — ещё не подтверждены сервером
@@ -114,15 +133,34 @@ func view_of(id: int) -> Dictionary:
 
 # ------------------------------------------------------------------ предсказание
 
-func local_tick(axis: int, buttons: int) -> void:
+## Кнопки, которые клиент применяет К СЕБЕ при предсказании: без CSP рывка кнопка рывка локально «не нажимается»,
+## но на сервер уходит как есть. Повтор команд после коррекции маскируется так же — иначе рывок «выстрелил бы» в повторе.
+func _local_buttons(buttons: int) -> int:
+	return buttons if predict_dash else (buttons & ~Proto.BTN_DASH)
+
+
+## press_us — момент нажатия клавиши (мкс, как в InputLatch); 0 — считать «сейчас» (боты, тесты).
+func local_tick(axis: int, buttons: int, press_us: int = 0) -> void:
 	_tick_count += 1
 	cmd_seq += 1
+	var step_buttons := buttons & GameHost.BUTTON_MASK
+	if buttons & Proto.BTN_DASH and my_id >= 0 and phase == GC.PHASE_PLAYING and state.alive:
+		_dash_marks.append({"seq": cmd_seq, "press_us": press_us if press_us > 0 else now_us(), "local_us": -1})
+		dash_pressed.emit(cmd_seq)
+		if _dash_marks.size() > MAX_DASH_MARKS:
+			_dash_marks.pop_front()
 	if my_id >= 0 and phase == GC.PHASE_PLAYING and state.alive:
-		var reason := PlatSim.step(state, axis, buttons)
+		if cheat_no_rules:
+			state.dash_cd = 0
+			state.stamina = GC.STAMINA_MAX
+		var dash_before := state.dash_left
+		var reason := PlatSim.step(state, axis, _local_buttons(step_buttons))
 		if reason != "":
 			local_dash_rejects += 1
+		if dash_before == 0 and state.dash_left > 0 and not _dash_marks.is_empty() and int(_dash_marks.back()["seq"]) == cmd_seq:
+			_dash_marks.back()["local_us"] = now_us()      # рывок стал виден (локально принят)
 		history[cmd_seq] = state.copy()
-	pending.append([cmd_seq, clampi(axis, -127, 127), buttons & GameHost.BUTTON_MASK])
+	pending.append([cmd_seq, clampi(axis, -127, 127), step_buttons])
 	if pending.size() > MAX_PENDING:
 		var drop: Array = pending.pop_front()
 		history.erase(drop[0])
@@ -151,6 +189,7 @@ func _set_phase(p: int) -> void:
 			history.clear()     # pending НЕ чистим: он нужен для избыточной отправки (защита от потерь)
 		if old != GC.PHASE_PLAYING and p == GC.PHASE_PLAYING:
 			history.clear()
+			_dash_marks.clear()
 		phase_changed.emit(p)
 
 
@@ -255,7 +294,9 @@ func _reconcile(server_state: PState, ack: int) -> void:
 	if phase != GC.PHASE_PLAYING:
 		# лобби/отсчёт/конец: просто зеркалим серверное (в отсчёте это состояния появления)
 		state = server_state
+		last_server_state = server_state.copy()
 		history.clear()
+		_dash_marks.clear()
 		last_ack = ack
 		while not pending.is_empty() and pending[0][0] <= ack:
 			pending.pop_front()
@@ -267,6 +308,8 @@ func _reconcile(server_state: PState, ack: int) -> void:
 		if k < ack:
 			history.erase(k)
 	last_ack = maxi(last_ack, ack)
+	last_server_state = server_state.copy()
+	_resolve_dash_marks(server_state, ack)
 	if predicted != null and predicted.equals(server_state):
 		history.erase(ack)
 		return
@@ -275,7 +318,7 @@ func _reconcile(server_state: PState, ack: int) -> void:
 	state = server_state.copy()
 	for cmd in pending:
 		if state.alive:
-			PlatSim.step(state, int(cmd[1]), int(cmd[2]))
+			PlatSim.step(state, int(cmd[1]), _local_buttons(int(cmd[2])))
 		history[int(cmd[0])] = state.copy()
 	var dx := float(state.x - before.x) / float(GC.SUB)
 	var dy := float(state.y - before.y) / float(GC.SUB)
@@ -287,6 +330,48 @@ func _reconcile(server_state: PState, ack: int) -> void:
 	max_error_px = maxf(max_error_px, err)
 	_corr_times.append(now_us())
 	correction.emit(err, pending.size())
+
+
+## Сервер подтвердил/отклонил нажатия рывка с номерами <= ack. Принят ли рывок — видно по таймеру перезарядки в
+## авторитетном состоянии: после принятия на команде seq он на ack равен DASH_COOLDOWN - (ack - seq).
+func _resolve_dash_marks(server_state: PState, ack: int) -> void:
+	var now := now_us()
+	while not _dash_marks.is_empty() and int(_dash_marks[0]["seq"]) <= ack:
+		var m: Dictionary = _dash_marks.pop_front()
+		var seq := int(m["seq"])
+		var accepted := server_state.dash_cd == GC.DASH_COOLDOWN - (ack - seq)
+		var confirm_ms := float(now - int(m["press_us"])) / 1000.0
+		var local_ms := -1.0
+		if accepted:
+			dash_accepted += 1
+			confirm_response_ms.append(confirm_ms)
+			# с предсказанием рывок виден сразу; без — только когда пришёл ответ сервера
+			local_ms = float(int(m["local_us"]) - int(m["press_us"])) / 1000.0 if int(m["local_us"]) >= 0 else confirm_ms
+			local_response_ms.append(local_ms)
+		else:
+			dash_denied += 1
+		dash_resolved.emit(accepted, local_ms, confirm_ms, "" if accepted else "rejected")
+
+
+## Для визуализации: путь предсказания в px. Первая точка — авторитетное положение сервера (на ack), дальше —
+## положение клиента (ноги) после каждой ещё НЕ подтверждённой команды. Состояние не меняет.
+func pending_path() -> PackedVector2Array:
+	var pts := PackedVector2Array()
+	if last_server_state == null:
+		return pts
+	pts.append(Vector2(last_server_state.x, last_server_state.y) / float(GC.SUB))
+	for cmd in pending:
+		var h: PState = history.get(int(cmd[0]))
+		if h != null:
+			pts.append(Vector2(h.x, h.y) / float(GC.SUB))
+	return pts
+
+
+## На сколько пикселей предсказанное положение «опережает» авторитетное (≈ RTT × скорость).
+func prediction_lead_px() -> float:
+	if last_server_state == null:
+		return 0.0
+	return Vector2(state.x - last_server_state.x, state.y - last_server_state.y).length() / float(GC.SUB)
 
 
 ## Коррекций за последнюю секунду и снимков за последнюю секунду (скользящее окно).

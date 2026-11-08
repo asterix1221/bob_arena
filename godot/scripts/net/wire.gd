@@ -37,6 +37,15 @@ static func w_i8(b: PackedByteArray, v: int) -> void:
 	b.append(v & 0xFF)
 
 
+## float32 (IEEE 754), порядок байт big-endian, как и остальные числа протокола (ПР №5: полная точность «до» квантования).
+static func w_f32(b: PackedByteArray, v: float) -> void:
+	var t := PackedByteArray()
+	t.resize(4)
+	t.encode_float(0, v)
+	for i in 4:
+		b.append(t[3 - i])
+
+
 class Reader extends RefCounted:
 	var data: PackedByteArray
 	var pos := 0
@@ -95,6 +104,17 @@ class Reader extends RefCounted:
 	func i16() -> int:
 		var v := u16()
 		return v - 65536 if v >= 32768 else v
+
+	func f32() -> float:
+		if left() < 4:
+			ok = false
+			return 0.0
+		var t := PackedByteArray()
+		t.resize(4)
+		for i in 4:
+			t[i] = data[pos + 3 - i]
+		pos += 4
+		return t.decode_float(0)
 
 	func bytes(n: int) -> PackedByteArray:
 		if n < 0 or left() < n:

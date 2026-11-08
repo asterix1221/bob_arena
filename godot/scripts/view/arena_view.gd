@@ -17,6 +17,10 @@ const BG_TOP := Color("141a2e")
 const BG_BOTTOM := Color("2a1a3a")
 
 
+func _ready() -> void:
+	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST      # пиксель-арт спрайтов без сглаживания
+
+
 func _process(delta: float) -> void:
 	time += delta
 	fx.update(delta)
@@ -67,6 +71,9 @@ func _draw() -> void:
 	for r in app.world_runes():
 		RuneArt.draw_rune(self, Vector2(r["x"], r["y"]), int(r["type"]), time, font, chaos)
 	var players: Array = app.world_players()
+	var viz: int = app.viz_mode if app.mode == "client" else PredViz.OFF       # визуализация предсказания — только у клиента
+	PredViz.draw_under(self, app.client, viz)
+	var local_feet := Vector2.ZERO
 	for p in players:
 		if not p["alive"]:
 			continue
@@ -74,13 +81,17 @@ func _draw() -> void:
 		var col: Color = p["color"]
 		var center := Vector2(p["x"], p["y"] - 24.0)
 		Auras.draw(self, center, Vector2(p["x"], p["y"]), p["facing"], int(p["buffs"]), time, font)
-		PlayerDraw.draw(self, p, a, col, p["local"], time)
+		var alpha := PredViz.local_alpha(viz) if p["local"] else 1.0
+		PlayerDraw.draw(self, p, a, col, p["local"], time, alpha)
+		if p["local"]:
+			local_feet = Vector2(p["x"], p["y"])
 		if p["local"] and p["state"] != null:
 			Auras.draw_timers(self, center, p["state"])
 	for p in players:
 		if p["alive"]:
 			_draw_overhead(p)
 	fx.draw(self, font)
+	PredViz.draw_over(self, app.client, viz, font, local_feet, float(Time.get_ticks_msec()), app.viz_flash_t0_ms, app.viz_flash_pos)
 
 
 func _draw_background() -> void:

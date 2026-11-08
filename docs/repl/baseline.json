@@ -1,0 +1,367 @@
+{
+	"actors_at_end": 72,
+	"checksum": 3456157062,
+	"client_stats": {
+		"destroys": 100,
+		"entries": 69603,
+		"reliable_pkts": 194,
+		"stale": 0,
+		"tomb_blocked": 0,
+		"unknown": 0,
+		"update_pkts": 1916,
+		"upserts": 172
+	},
+	"client_upstream_bytes_wire": 298152,
+	"clients": 3,
+	"config": "baseline",
+	"join": {
+		"avg_bytes_per_entry": 21.1273452157598,
+		"cells_visited": 0,
+		"clients": 3,
+		"cpu_us_avg_per_client_nettick": 776.794444444444,
+		"cpu_us_max": 1794,
+		"entries": 12792,
+		"entries_per_s_per_client": 2132.0,
+		"fields": 76734,
+		"heavy_actors": [
+			{
+				"bytes": 3783,
+				"cls": "player",
+				"entries": 180,
+				"id": 1
+			},
+			{
+				"bytes": 3783,
+				"cls": "player",
+				"entries": 180,
+				"id": 2
+			},
+			{
+				"bytes": 3783,
+				"cls": "player",
+				"entries": 180,
+				"id": 3
+			},
+			{
+				"bytes": 3783,
+				"cls": "tree",
+				"entries": 180,
+				"id": 100
+			},
+			{
+				"bytes": 3783,
+				"cls": "tree",
+				"entries": 180,
+				"id": 101
+			},
+			{
+				"bytes": 3783,
+				"cls": "tree",
+				"entries": 180,
+				"id": 102
+			},
+			{
+				"bytes": 3783,
+				"cls": "tree",
+				"entries": 180,
+				"id": 103
+			},
+			{
+				"bytes": 3783,
+				"cls": "tree",
+				"entries": 180,
+				"id": 104
+			},
+			{
+				"bytes": 3783,
+				"cls": "tree",
+				"entries": 180,
+				"id": 105
+			},
+			{
+				"bytes": 3783,
+				"cls": "tree",
+				"entries": 180,
+				"id": 106
+			}
+		],
+		"kb_s_per_client": 46.13232421875,
+		"kb_s_total": 138.39697265625,
+		"known_avg": 71.05,
+		"known_max": 72,
+		"overhead_bytes": 13176,
+		"packets": 366,
+		"packets_per_s_per_client": 61.0,
+		"payload_bytes": 270261,
+		"peak_100ms_kb_s_total": 141.123046875,
+		"per_class": {
+			"bot": {
+				"bytes": 30264,
+				"entries": 1440,
+				"entries_per_s": 720.0,
+				"kb_s": 14.77734375
+			},
+			"cloud": {
+				"bytes": 30264,
+				"entries": 1440,
+				"entries_per_s": 720.0,
+				"kb_s": 14.77734375
+			},
+			"pickup": {
+				"bytes": 45396,
+				"entries": 2160,
+				"entries_per_s": 1080.0,
+				"kb_s": 22.166015625
+			},
+			"player": {
+				"bytes": 11349,
+				"entries": 540,
+				"entries_per_s": 270.0,
+				"kb_s": 5.54150390625
+			},
+			"projectile": {
+				"bytes": 204,
+				"entries": 12,
+				"entries_per_s": 6.0,
+				"kb_s": 0.099609375
+			},
+			"tree": {
+				"bytes": 151320,
+				"entries": 7200,
+				"entries_per_s": 3600.0,
+				"kb_s": 73.88671875
+			}
+		},
+		"per_kind": {
+			"reliable": {
+				"bytes": 5244,
+				"entries": 219,
+				"packets": 12
+			},
+			"update": {
+				"bytes": 278193,
+				"entries": 12573,
+				"packets": 354
+			}
+		},
+		"relevance_checks": 0,
+		"reliable_ops": {
+			"destroy": 3,
+			"spawn": 216,
+			"state": 0
+		},
+		"seconds": 2.0,
+		"series_kb": [
+			133.681640625,
+			138.509765625,
+			4.6025390625
+		],
+		"wire_bytes": 283437
+	},
+	"join_known": [
+		71,
+		71,
+		71
+	],
+	"level_actors": 68,
+	"link_out_bytes": 4222200,
+	"link_out_packets": 6690,
+	"net_out_bytes_wire": 4409520,
+	"quality": {
+		"err_avg_px": 1.0067670002582,
+		"err_max_px": 5.333984375,
+		"err_p95_px": 5.3330078125,
+		"missing": 0,
+		"per_class_err_px": {
+			"bot": 1.53639080581405,
+			"cloud": 0.119272405450994,
+			"pickup": 0.0,
+			"player": 2.95302456999911,
+			"projectile": 5.3332065489234,
+			"tree": 0.0
+		},
+		"samples": 300,
+		"visible": 6407
+	},
+	"seconds": 30,
+	"steady": {
+		"avg_bytes_per_entry": 21.0970875264528,
+		"cells_visited": 0,
+		"clients": 3,
+		"cpu_us_avg_per_client_nettick": 861.01037037037,
+		"cpu_us_max": 4045,
+		"entries": 197049,
+		"entries_per_s_per_client": 2189.43333333333,
+		"fields": 1180512,
+		"heavy_actors": [
+			{
+				"bytes": 56700,
+				"cls": "player",
+				"entries": 2700,
+				"id": 1
+			},
+			{
+				"bytes": 56700,
+				"cls": "player",
+				"entries": 2700,
+				"id": 2
+			},
+			{
+				"bytes": 56700,
+				"cls": "player",
+				"entries": 2700,
+				"id": 3
+			},
+			{
+				"bytes": 56700,
+				"cls": "tree",
+				"entries": 2700,
+				"id": 100
+			},
+			{
+				"bytes": 56700,
+				"cls": "tree",
+				"entries": 2700,
+				"id": 101
+			},
+			{
+				"bytes": 56700,
+				"cls": "tree",
+				"entries": 2700,
+				"id": 102
+			},
+			{
+				"bytes": 56700,
+				"cls": "tree",
+				"entries": 2700,
+				"id": 103
+			},
+			{
+				"bytes": 56700,
+				"cls": "tree",
+				"entries": 2700,
+				"id": 104
+			},
+			{
+				"bytes": 56700,
+				"cls": "tree",
+				"entries": 2700,
+				"id": 105
+			},
+			{
+				"bytes": 56700,
+				"cls": "tree",
+				"entries": 2700,
+				"id": 106
+			}
+		],
+		"kb_s_per_client": 47.4401041666667,
+		"kb_s_total": 142.3203125,
+		"known_avg": 72.8711111111111,
+		"known_max": 76,
+		"overhead_bytes": 214920,
+		"packets": 5970,
+		"packets_per_s_per_client": 66.3333333333333,
+		"payload_bytes": 4157160,
+		"peak_100ms_kb_s_total": 149.1796875,
+		"per_class": {
+			"bot": {
+				"bytes": 453600,
+				"entries": 21600,
+				"entries_per_s": 720.0,
+				"kb_s": 14.765625
+			},
+			"cloud": {
+				"bytes": 453600,
+				"entries": 21600,
+				"entries_per_s": 720.0,
+				"kb_s": 14.765625
+			},
+			"pickup": {
+				"bytes": 680400,
+				"entries": 32400,
+				"entries_per_s": 1080.0,
+				"kb_s": 22.1484375
+			},
+			"player": {
+				"bytes": 170100,
+				"entries": 8100,
+				"entries_per_s": 270.0,
+				"kb_s": 5.537109375
+			},
+			"projectile": {
+				"bytes": 107580,
+				"entries": 5349,
+				"entries_per_s": 178.3,
+				"kb_s": 3.501953125
+			},
+			"tree": {
+				"bytes": 2268000,
+				"entries": 108000,
+				"entries_per_s": 3600.0,
+				"kb_s": 73.828125
+			}
+		},
+		"per_kind": {
+			"reliable": {
+				"bytes": 30588,
+				"entries": 597,
+				"packets": 570
+			},
+			"update": {
+				"bytes": 4341492,
+				"entries": 196452,
+				"packets": 5400
+			}
+		},
+		"relevance_checks": 0,
+		"reliable_ops": {
+			"destroy": 297,
+			"spawn": 300,
+			"state": 0
+		},
+		"seconds": 30.0,
+		"series_kb": [
+			136.8544921875,
+			144.6064453125,
+			142.951171875,
+			142.330078125,
+			143.3173828125,
+			142.6962890625,
+			145.658203125,
+			142.8251953125,
+			143.572265625,
+			142.330078125,
+			142.1015625,
+			140.9150390625,
+			142.8955078125,
+			140.4140625,
+			140.923828125,
+			143.4287109375,
+			140.8623046875,
+			144.158203125,
+			145.318359375,
+			139.86328125,
+			141.837890625,
+			140.296875,
+			141.03515625,
+			144.9111328125,
+			142.3505859375,
+			141.029296875,
+			142.283203125,
+			141.2255859375,
+			140.2880859375,
+			141.6650390625,
+			4.6640625
+		],
+		"wire_bytes": 4372080
+	},
+	"techniques": [],
+	"wall_ms": 5269,
+	"world_events": {
+		"bot_hits": 11,
+		"pickups_taken": 10,
+		"shots": 114,
+		"tree_hits": 102
+	}
+}

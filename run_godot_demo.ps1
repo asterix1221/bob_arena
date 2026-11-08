@@ -1,116 +1,159 @@
-﻿# run_godot_demo.ps1 — ПР №4 (Godot): запуск демонстрации и автопрогон сценариев T1–T6.
-#
-# Примеры (PowerShell 7, из корня репозитория):
-#   .\run_godot_demo.ps1 -Godot "C:\Godot\Godot_v4.7.2-stable_win64_console.exe" -Role Both -Profile lag100 -Predict 1
-#   .\run_godot_demo.ps1 -Godot "..." -Role Both -Profile lag175loss4 -Predict 0
-#   .\run_godot_demo.ps1 -Godot "..." -Role Scenarios                      # headless T1–T6 -> docs\godot\runs
-#   .\run_godot_demo.ps1 -Godot "..." -Role Scenarios -Only T3             # только сценарии, имя которых содержит T3
-#   .\run_godot_demo.ps1 -Godot "..." -Role Client -Profile none           # только второй клиент
-#
-# Профили сети (задержка — в ОДНУ сторону, эмулируется встроенным NetEmu на исходящем трафике клиента и сервера):
-#   none        — без эмуляции                (T1)
-#   lag100      — 100 мс, 0% потерь           (T2, T3)
-#   lag175loss4 — 175±25 мс, 4% потерь        (T4, T5)
-
+﻿<#
+.SYNOPSIS
+  Запуск Bob Arena (Godot 4) и проверок. PowerShell 7, из корня репозитория.
+.EXAMPLE
+  .\run_godot_demo.ps1 -Godot "C:\Godot\Godot_v4.7.2-stable_win64_console.exe" -Role Bot
+  .\run_godot_demo.ps1 -Godot "C:\Godot\Godot_v4.7.2-stable_win64_console.exe" -Role Both -Profile lag175loss4
+  .\run_godot_demo.ps1 -Godot "C:\Godot\Godot_v4.7.2-stable_win64_console.exe" -Role Tests
+.PARAMETER Role
+  Menu — главное меню; Host — хост; Join — клиент (-Ip, -Port); Both — хост и клиент (два окна) на этой машине;
+  Bot — хост + бот-тренер; Tests — все автотесты Godot (без окна); Shots — автоскриншоты экранов (нужен дисплей);
+  Scenarios — автопрогон сценариев ПР №4 T1–T5 (хост и клиент — два процесса по реальному UDP, без окна), логи в docs\game_runs;
+  Scenario — один сценарий (-Case T3) С ОКНАМИ: хост и клиент, клиентом управляет скрипт — для записи экрана (OBS / Win+Alt+R);
+  Lab — ПР №5: игра сразу на экране «Лаборатория репликации» (то же, что в меню; переключатели техник — в настройках справа и клавишами 1–7, B/O — «до»/«после»);
+  ReplProfile — ПР №5: профиль трафика «до/после» без окна (15 конфигураций), JSON в docs\repl, затем отчёты docs\Replication_*.md (нужен python).
+.PARAMETER Repl
+  Для Role Lab (ПР №5): стартовый набор оптимизаций — optimized («после», по умолчанию) или baseline («до»).
+.PARAMETER Predict
+  1 — клиент предсказывает рывок сразу (по умолчанию), 0 — рывок виден только после ответа сервера. В игре: F4.
+.PARAMETER Viz
+  Визуализация предсказания: 0 выкл, 1 призрак сервера, 2 предсказанный персонаж полупрозрачный, 3 полная. В игре: F8.
+.PARAMETER Profile
+  Эмуляция сети на датаграммах: none | lag100 (100 мс) | lag175loss4 (175±25 мс, 4% потерь). Меняется и в меню.
+#>
 param(
-    [string]$Godot = "godot",
-    [ValidateSet("Host", "Client", "Both", "Scenarios")][string]$Role = "Both",
+    [Parameter(Mandatory = $true)][string]$Godot,
+    [ValidateSet("Menu", "Host", "Join", "Both", "Bot", "Tests", "Shots", "Scenarios", "Scenario", "Lab", "ReplProfile")][string]$Role = "Menu",
     [ValidateSet("none", "lag100", "lag175loss4")][string]$Profile = "none",
-    [ValidateSet(0, 1)][int]$Predict = 1,
+    [string]$Ip = "127.0.0.1",
     [int]$Port = 24680,
-    [string]$Only = ""
+    [ValidateSet(0, 1)][int]$Predict = 1,
+    [ValidateSet(0, 1, 2, 3)][int]$Viz = 1,
+    [ValidateSet("T1", "T2", "T3", "T4", "T5")][string]$Case = "T3",
+    [ValidateSet("baseline", "optimized")][string]$Repl = "optimized",
+    [string]$Name = "",
+    [switch]$DebugKeys
 )
 
-$ErrorActionPreference = "Stop"
-
-# Кириллица в выводе PowerShell: консоль и .NET в UTF-8 (иначе возможны «кракозябры»).
+# Кириллица в консоли: вывод Godot — UTF-8.
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$ErrorActionPreference = "Stop"
 
 $Proj = Join-Path $PSScriptRoot "godot"
-if (-not (Test-Path (Join-Path $Proj "project.godot"))) { Write-Error "Не найден godot\project.godot (запускайте из корня репозитория)."; exit 1 }
-if (-not (Get-Command $Godot -ErrorAction SilentlyContinue) -and -not (Test-Path $Godot)) {
-    Write-Error "Godot не найден: '$Godot'. Укажите путь параметром -Godot (лучше *_console.exe)."; exit 1
-}
+if (-not (Test-Path $Godot)) { Write-Error "Godot не найден: $Godot"; exit 1 }
 
-# Первый запуск: в чистой копии репозитория нет кэша Godot (папка godot\.godot, она в .gitignore).
-# Без него запуск не знает глобальных классов (class_name) и main.gd не компилируется.
-# Импорт строит кэш за несколько секунд; делаем его один раз автоматически.
+# Импорт проекта при КАЖДОМ запуске (2-5 секунд). Godot без окна редактора не перестраивает реестр глобальных классов
+# (class_name): если в godot\.godot остался кэш от другой версии игры, скрипты не компилируются
+# («Could not find type "GameUI"», серый экран, тесты без результата). Импорт этот реестр обновляет.
+Write-Host "Импорт проекта Godot (обновление кэша .godot) ..."
+$ErrorActionPreference = "Continue"   # Godot пишет безобидные предупреждения в stderr; со "Stop" PowerShell счёл бы их ошибкой
+$importOut = & $Godot --headless --path $Proj --import 2>&1
+$ErrorActionPreference = "Stop"
 $cache = Join-Path $Proj ".godot\global_script_class_cache.cfg"
 if (-not (Test-Path $cache)) {
-    Write-Host "Первый запуск: импорт проекта Godot (создаётся кэш .godot) ..."
-    $importSink = [System.IO.Path]::GetTempFileName()
-    Start-Process -FilePath $Godot -ArgumentList "--headless --path `"$Proj`" --import" -Wait -NoNewWindow -RedirectStandardOutput $importSink | Out-Null
-    if (-not (Test-Path $cache)) {
-        Write-Error "Импорт не создал $cache. Вывод Godot:`n$(Get-Content $importSink -Raw -Encoding utf8)"; exit 1
-    }
+    Write-Host ($importOut | Select-Object -Last 20 | Out-String)
+    Write-Error "Импорт не создал $cache"; exit 1
 }
 
-function Get-Net([string]$Name) {
-    switch ($Name) {
-        "none"        { return "--lag=0 --jitter=0 --loss=0" }
-        "lag100"      { return "--lag=100 --jitter=0 --loss=0" }
-        "lag175loss4" { return "--lag=175 --jitter=25 --loss=4" }
-    }
+$preset = @{ none = 0; lag100 = 1; lag175loss4 = 2 }[$Profile]
+function Game-Args([string]$extra) {
+    $a = "--path `"$Proj`" -- --preset=$preset --port=$Port --predict=$Predict --viz=$Viz $extra"
+    if ($DebugKeys) { $a += " --debug" }
+    return $a
 }
 
-$script:LastSink = $null
-
-function Start-Godot([string]$GodotArgs, [switch]$Wait, [switch]$Hidden) {
-    $line = "--path `"$Proj`" $(if ($Hidden) { '--headless ' })-- $GodotArgs"
-    if ($Hidden) {
-        $script:LastSink = [System.IO.Path]::GetTempFileName()
-        return Start-Process -FilePath $Godot -ArgumentList $line -PassThru -Wait:$Wait -NoNewWindow -RedirectStandardOutput $script:LastSink
-    }
-    return Start-Process -FilePath $Godot -ArgumentList $line -PassThru -Wait:$Wait
-}
-
-if ($Role -eq "Scenarios") {
-    $Out = Join-Path $PSScriptRoot "docs\godot\runs"
-    New-Item -ItemType Directory -Force -Path $Out | Out-Null
-    $Out = (Resolve-Path $Out).Path      # Godot не понимает относительные пути в FileAccess
-    # имя, predict, lag, jitter, loss, бот
-    $cases = @(
-        @("T1_walk_noemu_pred",     1, 0,   0,  0, "walk"),
-        @("T2_lag100_nopred",       0, 100, 0,  0, "dash_latency"),
-        @("T3_lag100_pred",         1, 100, 0,  0, "dash_latency"),
-        @("T4_lag175loss4_pred",    1, 175, 25, 4, "loss_mix"),
-        @("T5_lag175loss4_cheat",   1, 175, 25, 4, "cheat"),
-        @("T6_lag100_wall",         1, 100, 0,  0, "wall")
-    )
-    $p = 24800
-    foreach ($c in $cases) {
-        if ($Only -and ($c[0] -notlike "*$Only*")) { continue }
-        $p++
-        $name = $c[0]
-        $hostLog = Join-Path $Out "$name.host.log"; $cliLog = Join-Path $Out "$name.client.log"
-        Remove-Item $hostLog, $cliLog -ErrorAction SilentlyContinue
-        # Godot надёжнее принимает пути с прямыми слэшами
-        $hostLogArg = $hostLog.Replace([string][char]92, "/"); $cliLogArg = $cliLog.Replace([string][char]92, "/")
-        $net = "--lag=$($c[2]) --jitter=$($c[3]) --loss=$($c[4])"
-        $h = Start-Godot "--host --port=$p --quit-after=60 --exit-on-disconnect $net --out=`"$hostLogArg`"" -Hidden
-        for ($i = 0; $i -lt 100; $i++) {
-            if ((Test-Path $hostLog) -and (Select-String -Path $hostLog -Pattern "LISTEN SERVER" -Quiet)) { break }
-            Start-Sleep -Milliseconds 200
+switch ($Role) {
+    "Tests" {
+        $suites = @("run_net_tests", "run_game_tests", "run_game_net_tests", "run_pred_tests", "run_view_tests", "run_app_tests", "run_udp_tests", "run_repl_tests")
+        $bad = 0
+        foreach ($s in $suites) {
+            $ErrorActionPreference = "Continue"
+            $out = & $Godot --headless --path $Proj -s "res://tests/$s.gd" 2>&1
+            $ErrorActionPreference = "Stop"
+            $line = ($out | Select-String "тестов" | Select-Object -Last 1).Line
+            if (-not $line) {
+                $line = "НЕТ РЕЗУЛЬТАТА. Последние строки вывода Godot:"
+                $bad++
+                $out | Select-Object -Last 8 | ForEach-Object { Write-Host "    $_" }
+            }
+            elseif ($line -notmatch ", 0 провалено") { $bad++ }
+            "{0,-22} {1}" -f $s, $line
         }
-        Start-Godot "--join=127.0.0.1 --port=$p --predict=$($c[1]) $net --bot=$($c[5]) --out=`"$cliLogArg`"" -Wait -Hidden | Out-Null
-        $h | Wait-Process -Timeout 30 -ErrorAction SilentlyContinue
-        $res = if (Test-Path $cliLog) { (Select-String -Path $cliLog -Pattern "^\[RESULT\] corrections" -Encoding utf8 | Select-Object -First 1).Line } else {
-            "НЕТ ЛОГА КЛИЕНТА. Вывод Godot (клиент):`n" + (Get-Content $script:LastSink -Raw -Encoding utf8)
-        }
-        Write-Host "$name : $res"
+        if ($bad -gt 0) { Write-Host "Есть проваленные наборы: $bad"; exit 1 }
+        Write-Host "Все наборы Godot прошли."
     }
-    Write-Host "Логи: $Out. Графики и сводка: python tools\godot_report.py"
-    exit 0
-}
-
-$net = Get-Net $Profile
-if ($Role -in @("Host", "Both")) {
-    Start-Godot "--host --port=$Port --predict=$Predict" | Out-Null
-    Write-Host "Listen Server запущен (порт $Port)."
-    if ($Role -eq "Both") { Start-Sleep -Seconds 3 }
-}
-if ($Role -in @("Client", "Both")) {
-    Start-Godot "--join=127.0.0.1 --port=$Port --predict=$Predict $net" | Out-Null
-    Write-Host "Клиент запущен: профиль=$Profile, предсказание=$Predict."
+    "Shots" {
+        $dir = Join-Path $PSScriptRoot "docs\game_shots"
+        New-Item -ItemType Directory -Force $dir | Out-Null
+        & $Godot --path $Proj -- --shots="$($dir -replace '\\','/')"
+        Write-Host "Скриншоты: $dir"
+    }
+    "Scenarios" {
+        # T1–T5: два процесса Godot без окна по реальному UDP (хост = Listen Server, клиентом управляет скрипт). Логи: docs\game_runs
+        $runs = Join-Path $PSScriptRoot "docs\game_runs"
+        New-Item -ItemType Directory -Force $runs | Out-Null
+        $p = 24800
+        foreach ($c in @("T1", "T2", "T3", "T4", "T5")) {
+            $p++
+            $hl = Join-Path $runs "$c.host.log"; $cl = Join-Path $runs "$c.client.log"
+            Remove-Item $hl, $cl -ErrorAction SilentlyContinue
+            $h = Start-Process -FilePath $Godot -PassThru -WindowStyle Hidden -ArgumentList "--headless --path `"$Proj`" -- --scenario=$c --role=host --port=$p --quit-after=90 --out=`"$hl`""
+            for ($i = 0; $i -lt 100; $i++) { if ((Test-Path $hl) -and (Select-String -Path $hl -Pattern "LISTEN SERVER" -Quiet)) { break }; Start-Sleep -Milliseconds 200 }
+            & $Godot --headless --path $Proj -- --scenario=$c --role=client --join=127.0.0.1 --port=$p --quit-after=90 --out="$cl" | Out-Null
+            $h | Wait-Process -Timeout 20 -ErrorAction SilentlyContinue
+            $line = if (Test-Path $cl) { (Select-String -Path $cl -Pattern "^\[RESULT\] corrections" | Select-Object -First 1).Line } else { $null }
+            "{0}: {1}" -f $c, $(if ($line) { $line } else { "НЕТ РЕЗУЛЬТАТА (см. логи)" })
+        }
+        Write-Host "Логи: $runs. Сводка и графики: python tools\game_report.py"
+    }
+    "Scenario" {
+        # Один сценарий С ОКНАМИ: хост и клиент (клиентом управляет скрипт). Запишите окно клиента (OBS / Win+Alt+R).
+        $hl = Join-Path $env:TEMP "bob_$Case.host.log"; $cl = Join-Path $env:TEMP "bob_$Case.client.log"
+        Remove-Item $hl, $cl -ErrorAction SilentlyContinue
+        $h = Start-Process -FilePath $Godot -PassThru -ArgumentList "--path `"$Proj`" -- --scenario=$Case --role=host --port=$Port --out=`"$hl`""
+        for ($i = 0; $i -lt 100; $i++) { if ((Test-Path $hl) -and (Select-String -Path $hl -Pattern "LISTEN SERVER" -Quiet)) { break }; Start-Sleep -Milliseconds 200 }
+        Write-Host "Запись экрана: начните её сейчас (Win+Alt+R). Окно клиента запускается; сценарий идёт ~20 с."
+        & $Godot --path $Proj -- --scenario=$Case --role=client --join=127.0.0.1 --port=$Port --viz=$Viz --out="$cl"
+        $h | Wait-Process -Timeout 20 -ErrorAction SilentlyContinue
+        Write-Host "Готово. Лог клиента: $cl"
+    }
+    "Lab" {
+        # ПР №5: сама игра, сразу экран «Лаборатория репликации» (то же, что меню -> «Лаборатория репликации»)
+        Start-Process -FilePath $Godot -ArgumentList (Game-Args "--lab --repl=$Repl")
+        Write-Host "Лаборатория репликации запущена. Справа — настройки (переключатели техник, набор, сеть, «Замер»); A/D — идти, Пробел — выстрел, 1–7, B/O, H/M/G — клавиши, Esc — в меню."
+    }
+    "ReplProfile" {
+        $out = Join-Path $PSScriptRoot "docs\repl"
+        New-Item -ItemType Directory -Force $out | Out-Null
+        $ErrorActionPreference = "Continue"
+        $outArg = "--out=" + ($out -replace '\\', '/')
+        & $Godot --headless --path $Proj --script res://tests/run_repl_profile.gd -- $outArg
+        $rc = $LASTEXITCODE
+        $ErrorActionPreference = "Stop"
+        if ($rc -ne 0) { Write-Error "Профиль завершился с ошибкой ($rc)"; exit 1 }
+        $py = Get-Command python -ErrorAction SilentlyContinue
+        if ($py) { & python (Join-Path $PSScriptRoot "tools\repl_report.py") }
+        else { Write-Host "python не найден: отчёты docs\Replication_*.md не обновлены (python tools\repl_report.py)" }
+    }
+    "Menu" { Start-Process -FilePath $Godot -ArgumentList (Game-Args "") }
+    "Bot" {
+        $n = if ($Name) { "--name=`"$Name`"" } else { "" }
+        Start-Process -FilePath $Godot -ArgumentList (Game-Args "--host --bot $n")
+    }
+    "Host" {
+        $n = if ($Name) { "--name=`"$Name`"" } else { "" }
+        Start-Process -FilePath $Godot -ArgumentList (Game-Args "--host $n")
+        Write-Host "Хост запущен (порт $Port). Друзья подключаются на ваш IP:$Port; игра стартует кнопкой «Старт» в лобби."
+    }
+    "Join" {
+        $n = if ($Name) { "--name=`"$Name`"" } else { "" }
+        Start-Process -FilePath $Godot -ArgumentList (Game-Args "--join=$Ip $n")
+    }
+    "Both" {
+        Start-Process -FilePath $Godot -ArgumentList (Game-Args "--host --name=Хост")
+        Start-Sleep -Milliseconds 1500
+        Start-Process -FilePath $Godot -ArgumentList (Game-Args "--join=127.0.0.1 --name=Гость --color=1")
+        Write-Host "Запущены хост и клиент (два окна). Нажмите «Старт» в окне хоста."
+    }
 }

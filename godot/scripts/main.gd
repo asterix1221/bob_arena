@@ -7,10 +7,18 @@ extends Node2D
 ##   godot --path godot -- --join=127.0.0.1            клиент
 ##   ... --predict=0|1  --lag=100 --jitter=0 --loss=0   режим рывка и эмуляция сети клиента
 ##   ... --bot=dash_latency --out=run.log               автоматический сценарий + лог (T1–T5)
+##   ... --viz=0|1|2|3                                  визуализация предсказания (клавиша F8 переключает в игре)
 ## Без аргументов: клавиша H — хост, J — клиент к 127.0.0.1.
 
 const PORT_DEFAULT := 24680
 const SNAPSHOT_EVERY := 2                    # тиков между снимками (30 Гц)
+# Визуализация предсказания (F8 переключает по кругу, --viz=N задаёт стартовый режим).
+const VIZ_OFF := 0      # только свой персонаж
+const VIZ_GHOST := 1    # + полупрозрачный «призрак» авторитетного положения сервера
+const VIZ_FADED := 2    # свой (предсказанный) персонаж полупрозрачный, подтверждённое сервером положение — плотное
+const VIZ_FULL := 3     # оба + путь неподтверждённых команд, линия ошибки, подписи
+const VIZ_NAMES := ["off", "server ghost", "predicted faded", "full (path + error)"]
+const FLASH_MS := 700.0
 const SPAWNS := [Vector2(120, 200), Vector2(120, 360), Vector2(120, 520)]
 
 var args := {}
@@ -36,6 +44,10 @@ var hud: Label
 var started := false
 var disconnected_at_ms := -1.0
 var snapshots_in := 0
+var viz_mode := VIZ_GHOST
+var seen_corrections := 0
+var flash_t0_ms := -1.0                      # момент последней коррекции (для красной вспышки)
+var flash_pos := Vector2.ZERO
 
 
 func _ready() -> void:
@@ -49,6 +61,7 @@ func _ready() -> void:
 	add_child(hud)
 	emu.configure(float(args.get("lag", 0.0)), float(args.get("jitter", 0.0)), float(args.get("loss", 0.0)))
 	emu.rng.seed = int(args.get("seed", 7))
+	viz_mode = clampi(int(args.get("viz", VIZ_GHOST)), VIZ_OFF, VIZ_FULL)
 	if args.has("out"):
 		out = FileAccess.open(str(args["out"]), FileAccess.WRITE)
 	if args.has("quit-after"):
@@ -197,8 +210,19 @@ func _process(_delta: float) -> void:
 		_finish()
 		return
 	_handle_ui_keys()
+	_track_corrections()
 	_update_hud()
 	queue_redraw()
+
+
+## Запомнить момент и место новой коррекции — визуализация нарисует там затухающее красное кольцо.
+func _track_corrections() -> void:
+	if predictor == null:
+		return
+	if predictor.corrections > seen_corrections:
+		seen_corrections = predictor.corrections
+		flash_t0_ms = _now()
+		flash_pos = predictor.display_pos()
 
 
 func _physics_process(_delta: float) -> void:
@@ -309,6 +333,9 @@ func _handle_ui_keys() -> void:
 	if _just_pressed(KEY_F4):
 		predictor.predict_dash = not predictor.predict_dash
 		_log("[MODE] predict_dash=%s" % str(predictor.predict_dash))
+	if _just_pressed(KEY_F8):
+		viz_mode = (viz_mode + 1) % VIZ_NAMES.size()
+		_log("[VIZ] mode=%d (%s)" % [viz_mode, VIZ_NAMES[viz_mode]])
 	if _just_pressed(KEY_F5):
 		emu.configure(0.0, 0.0, 0.0)
 	if _just_pressed(KEY_F6):
@@ -348,10 +375,11 @@ func _update_hud() -> void:
 		var lr := "-" if predictor.confirm_response_ms.is_empty() else "%.0f ms" % predictor.confirm_response_ms.back()
 		var ll := "-" if predictor.local_response_ms.is_empty() else "%.0f ms" % predictor.local_response_ms.back()
 		lines.append("Last dash response: local %s, server-confirmed %s" % [ll, lr])
+		lines.append("Prediction view [F8]: %s   (client ahead of server: %.1f px)" % [VIZ_NAMES[viz_mode], predictor.prediction_lead_px()])
 	elif role == "host" and server != null:
 		var h: PlayerState = server.players[1]["state"]
 		lines.append("Stamina: %.0f   Cooldown: %.2f s   peers: %d" % [h.stamina, h.cooldown_left / 60.0, server.players.size() - 1])
-	lines.append("WASD move, Shift dash | client: F1/F2 cheat, F3 off, F4 toggle prediction, F5/F6/F7 net profile none/100ms/175ms+4%")
+	lines.append("WASD move, Shift dash | client: F1/F2 cheat, F3 off, F4 toggle prediction, F5/F6/F7 net profile none/100ms/175ms+4%, F8 prediction view")
 	hud.text = "\n".join(lines)
 
 
@@ -368,12 +396,7 @@ func _draw() -> void:
 			if s.dash_left > 0:
 				draw_arc(s.pos, radius + 5, 0, TAU, 24, Color.WHITE, 2.0)
 	elif role == "client" and predictor != null:
-		var g := predictor.last_server_state                      # «призрак» авторитетного положения
-		draw_arc(g.pos, radius, 0, TAU, 28, Color(0.8, 0.8, 0.8, 0.6), 1.5)
-		var me := predictor.display_pos()
-		draw_circle(me, radius, Color(0.3, 0.9, 0.4))
-		if predictor.state.dash_left > 0:
-			draw_arc(me, radius + 5, 0, TAU, 24, Color.WHITE, 2.0)
+		_draw_client_player(radius)
 		var now := _now()
 		for id in remotes:
 			var r: RemoteInterp = remotes[id]
@@ -381,3 +404,54 @@ func _draw() -> void:
 			draw_circle(rp, radius, Color(0.4, 0.6, 1.0))
 			if r.dashing:
 				draw_arc(rp, radius + 5, 0, TAU, 24, Color.WHITE, 2.0)
+
+
+## Свой персонаж на клиенте + визуализация предсказания.
+##   зелёный — положение, которое клиент ПРЕДСКАЗАЛ и показывает (применено сразу, сервер ещё не подтвердил);
+##   оранжевый — последнее АВТОРИТЕТНОЕ положение от сервера (отстаёт на ≈ RTT/2 + интервал снимка).
+## Красное кольцо — клиент только что получил коррекцию и перемотал/переиграл команды.
+func _draw_client_player(radius: float) -> void:
+	var srv: PlayerState = predictor.last_server_state
+	var me := predictor.display_pos()
+	var mine := Color(0.3, 0.9, 0.4)
+	var srv_col := Color(1.0, 0.75, 0.25)
+	var pred_alpha := 1.0
+	var srv_alpha := 0.0
+	match viz_mode:
+		VIZ_GHOST:
+			srv_alpha = 0.45
+		VIZ_FADED:
+			pred_alpha = 0.4
+			srv_alpha = 1.0
+		VIZ_FULL:
+			pred_alpha = 0.5
+			srv_alpha = 0.7
+	# 1) авторитетное положение сервера (под предсказанным)
+	if srv_alpha > 0.0:
+		draw_circle(srv.pos, radius, Color(srv_col.r, srv_col.g, srv_col.b, srv_alpha))
+		draw_arc(srv.pos, radius, 0, TAU, 28, Color(srv_col.r, srv_col.g, srv_col.b, 1.0), 1.5)
+		if srv.dash_left > 0:
+			draw_arc(srv.pos, radius + 5, 0, TAU, 24, Color(srv_col.r, srv_col.g, srv_col.b, 1.0), 2.0)
+	# 2) путь неподтверждённых команд (только полная визуализация)
+	if viz_mode == VIZ_FULL:
+		var path := predictor.pending_path()
+		if path.size() >= 2:
+			draw_polyline(path, Color(mine.r, mine.g, mine.b, 0.6), 2.0)
+			for i in range(1, path.size()):
+				draw_circle(path[i], 2.5, Color(mine.r, mine.g, mine.b, 0.9))
+	# 3) предсказанный персонаж
+	draw_circle(me, radius, Color(mine.r, mine.g, mine.b, pred_alpha))
+	if predictor.state.dash_left > 0:
+		draw_arc(me, radius + 5, 0, TAU, 24, Color(1, 1, 1, maxf(pred_alpha, 0.6)), 2.0)
+	# 4) линия «опережение/ошибка» и подписи
+	if viz_mode == VIZ_FULL:
+		draw_line(srv.pos, me, Color(1, 1, 1, 0.5), 1.0)
+		var font := ThemeDB.fallback_font
+		draw_string(font, srv.pos + Vector2(radius + 4, -radius - 2), "server", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, srv_col)
+		draw_string(font, me + Vector2(radius + 4, radius + 12), "predicted (+%.0f px, %d cmd)" % [predictor.prediction_lead_px(), predictor.pending.size()], HORIZONTAL_ALIGNMENT_LEFT, -1, 13, mine)
+	# 5) вспышка коррекции
+	if viz_mode != VIZ_OFF and flash_t0_ms >= 0.0:
+		var age := _now() - flash_t0_ms
+		if age < FLASH_MS:
+			var k := 1.0 - age / FLASH_MS
+			draw_arc(flash_pos, radius + 6.0 + age * 0.04, 0, TAU, 32, Color(1.0, 0.25, 0.2, k), 3.0)

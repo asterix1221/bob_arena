@@ -53,6 +53,24 @@ func display_pos() -> Vector2:
 	return state.pos + offset
 
 
+## Для визуализации: путь предсказания. Первая точка — авторитетное положение сервера (на ack),
+## дальше — положение клиента после каждой ЕЩЁ НЕ ПОДТВЕРЖДЁННОЙ команды. Чем длиннее путь, тем больше
+## клиент «живёт в будущем» относительно сервера (≈ RTT). Состояние не меняет.
+func pending_path() -> PackedVector2Array:
+	var pts := PackedVector2Array()
+	pts.append(last_server_state.pos)
+	for cmd in pending:
+		var h: PlayerState = history.get(cmd["seq"])
+		if h != null:
+			pts.append(h.pos)
+	return pts
+
+
+## Для визуализации: на сколько пикселей предсказанное положение «опережает» авторитетное.
+func prediction_lead_px() -> float:
+	return state.pos.distance_to(last_server_state.pos)
+
+
 ## Вызывать каждый тик. Возвращает {"cmd": Dictionary, "send_dash_request": bool}.
 func local_input(move: Vector2, dash_pressed: bool) -> Dictionary:
 	if dash_pressed:

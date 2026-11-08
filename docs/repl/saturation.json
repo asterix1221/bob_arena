@@ -1,0 +1,739 @@
+{
+	"budget": 600,
+	"runs": [
+		{
+			"actors_at_end": 72,
+			"checksum": 3456157062,
+			"client_stats": {
+				"destroys": 100,
+				"entries": 26824,
+				"reliable_pkts": 194,
+				"stale": 0,
+				"tomb_blocked": 0,
+				"unknown": 0,
+				"update_pkts": 958,
+				"upserts": 172
+			},
+			"client_upstream_bytes_wire": 298152,
+			"clients": 3,
+			"config": "saturated_priority_off",
+			"join": {
+				"avg_bytes_per_entry": 21.1779710144928,
+				"cells_visited": 0,
+				"clients": 3,
+				"cpu_us_avg_per_client_nettick": 373.494444444444,
+				"cpu_us_max": 776,
+				"entries": 5175,
+				"entries_per_s_per_client": 862.5,
+				"fields": 31032,
+				"heavy_actors": [
+					{
+						"bytes": 3783,
+						"cls": "player",
+						"entries": 180,
+						"id": 1
+					},
+					{
+						"bytes": 3783,
+						"cls": "player",
+						"entries": 180,
+						"id": 2
+					},
+					{
+						"bytes": 3783,
+						"cls": "player",
+						"entries": 180,
+						"id": 3
+					},
+					{
+						"bytes": 3783,
+						"cls": "tree",
+						"entries": 180,
+						"id": 100
+					},
+					{
+						"bytes": 3783,
+						"cls": "tree",
+						"entries": 180,
+						"id": 101
+					},
+					{
+						"bytes": 3783,
+						"cls": "tree",
+						"entries": 180,
+						"id": 102
+					},
+					{
+						"bytes": 3783,
+						"cls": "tree",
+						"entries": 180,
+						"id": 103
+					},
+					{
+						"bytes": 3783,
+						"cls": "tree",
+						"entries": 180,
+						"id": 104
+					},
+					{
+						"bytes": 3783,
+						"cls": "tree",
+						"entries": 180,
+						"id": 105
+					},
+					{
+						"bytes": 3783,
+						"cls": "tree",
+						"entries": 180,
+						"id": 106
+					}
+				],
+				"kb_s_per_client": 18.9453125,
+				"kb_s_total": 56.8359375,
+				"known_avg": 71.05,
+				"known_max": 72,
+				"overhead_bytes": 6804,
+				"packets": 189,
+				"packets_per_s_per_client": 31.5,
+				"payload_bytes": 109596,
+				"peak_100ms_kb_s_total": 66.50390625,
+				"per_class": {
+					"bot": {
+						"bytes": 528,
+						"entries": 24,
+						"entries_per_s": 12.0,
+						"kb_s": 0.2578125
+					},
+					"cloud": {
+						"bytes": 528,
+						"entries": 24,
+						"entries_per_s": 12.0,
+						"kb_s": 0.2578125
+					},
+					"pickup": {
+						"bytes": 792,
+						"entries": 36,
+						"entries_per_s": 18.0,
+						"kb_s": 0.38671875
+					},
+					"player": {
+						"bytes": 11349,
+						"entries": 540,
+						"entries_per_s": 270.0,
+						"kb_s": 5.54150390625
+					},
+					"projectile": {
+						"bytes": 78,
+						"entries": 6,
+						"entries_per_s": 3.0,
+						"kb_s": 0.0380859375
+					},
+					"tree": {
+						"bytes": 95565,
+						"entries": 4545,
+						"entries_per_s": 2272.5,
+						"kb_s": 46.66259765625
+					}
+				},
+				"per_kind": {
+					"reliable": {
+						"bytes": 5244,
+						"entries": 219,
+						"packets": 12
+					},
+					"update": {
+						"bytes": 111156,
+						"entries": 4956,
+						"packets": 177
+					}
+				},
+				"relevance_checks": 0,
+				"reliable_ops": {
+					"destroy": 3,
+					"spawn": 216,
+					"state": 0
+				},
+				"seconds": 2.0,
+				"series_kb": [
+					56.326171875,
+					55.505859375,
+					1.83984375
+				],
+				"wire_bytes": 116400
+			},
+			"join_known": [
+				71,
+				71,
+				71
+			],
+			"level_actors": 68,
+			"link_out_bytes": 1651908,
+			"link_out_packets": 3990,
+			"net_out_bytes_wire": 1763628,
+			"quality": {
+				"err_avg_px": 22.6184948974343,
+				"err_max_px": 314.666015625,
+				"err_p95_px": 146.88330078125,
+				"missing": 0,
+				"per_class_err_px": {
+					"bot": 78.5110888171928,
+					"cloud": 112.109599224933,
+					"pickup": 0.0,
+					"player": 2.95302456999911,
+					"projectile": 54.872081105302,
+					"tree": 0.0
+				},
+				"samples": 300,
+				"visible": 6407
+			},
+			"seconds": 30,
+			"steady": {
+				"avg_bytes_per_entry": 21.1093350131895,
+				"cells_visited": 0,
+				"clients": 3,
+				"cpu_us_avg_per_client_nettick": 362.490740740741,
+				"cpu_us_max": 2989,
+				"entries": 76197,
+				"entries_per_s_per_client": 846.633333333333,
+				"fields": 455400,
+				"heavy_actors": [
+					{
+						"bytes": 56700,
+						"cls": "player",
+						"entries": 2700,
+						"id": 1
+					},
+					{
+						"bytes": 56700,
+						"cls": "player",
+						"entries": 2700,
+						"id": 2
+					},
+					{
+						"bytes": 56700,
+						"cls": "player",
+						"entries": 2700,
+						"id": 3
+					},
+					{
+						"bytes": 56700,
+						"cls": "tree",
+						"entries": 2700,
+						"id": 100
+					},
+					{
+						"bytes": 56700,
+						"cls": "tree",
+						"entries": 2700,
+						"id": 101
+					},
+					{
+						"bytes": 56700,
+						"cls": "tree",
+						"entries": 2700,
+						"id": 102
+					},
+					{
+						"bytes": 56700,
+						"cls": "tree",
+						"entries": 2700,
+						"id": 103
+					},
+					{
+						"bytes": 56700,
+						"cls": "tree",
+						"entries": 2700,
+						"id": 104
+					},
+					{
+						"bytes": 56700,
+						"cls": "tree",
+						"entries": 2700,
+						"id": 105
+					},
+					{
+						"bytes": 56700,
+						"cls": "tree",
+						"entries": 2700,
+						"id": 106
+					}
+				],
+				"kb_s_per_client": 18.7303385416667,
+				"kb_s_total": 56.191015625,
+				"known_avg": 72.8711111111111,
+				"known_max": 76,
+				"overhead_bytes": 117720,
+				"packets": 3270,
+				"packets_per_s_per_client": 36.3333333333333,
+				"payload_bytes": 1608468,
+				"peak_100ms_kb_s_total": 60.1171875,
+				"per_class": {
+					"bot": {
+						"bytes": 0,
+						"entries": 0,
+						"entries_per_s": 0.0,
+						"kb_s": 0.0
+					},
+					"cloud": {
+						"bytes": 0,
+						"entries": 0,
+						"entries_per_s": 0.0,
+						"kb_s": 0.0
+					},
+					"pickup": {
+						"bytes": 0,
+						"entries": 0,
+						"entries_per_s": 0.0,
+						"kb_s": 0.0
+					},
+					"player": {
+						"bytes": 170100,
+						"entries": 8100,
+						"entries_per_s": 270.0,
+						"kb_s": 5.537109375
+					},
+					"projectile": {
+						"bytes": 7788,
+						"entries": 597,
+						"entries_per_s": 19.9,
+						"kb_s": 0.253515625
+					},
+					"tree": {
+						"bytes": 1417500,
+						"entries": 67500,
+						"entries_per_s": 2250.0,
+						"kb_s": 46.142578125
+					}
+				},
+				"per_kind": {
+					"reliable": {
+						"bytes": 30588,
+						"entries": 597,
+						"packets": 570
+					},
+					"update": {
+						"bytes": 1695600,
+						"entries": 75600,
+						"packets": 2700
+					}
+				},
+				"relevance_checks": 0,
+				"reliable_ops": {
+					"destroy": 297,
+					"spawn": 300,
+					"state": 0
+				},
+				"seconds": 30.0,
+				"series_kb": [
+					54.029296875,
+					56.619140625,
+					56.255859375,
+					56.126953125,
+					56.4375,
+					56.30859375,
+					56.255859375,
+					56.4375,
+					56.630859375,
+					56.126953125,
+					56.513671875,
+					56.126953125,
+					56.138671875,
+					55.6875,
+					56.07421875,
+					55.93359375,
+					56.07421875,
+					56.232421875,
+					56.654296875,
+					55.998046875,
+					56.126953125,
+					55.81640625,
+					56.30859375,
+					56.0625,
+					56.33203125,
+					55.93359375,
+					56.203125,
+					56.4375,
+					55.869140625,
+					56.138671875,
+					1.83984375
+				],
+				"wire_bytes": 1726188
+			},
+			"techniques": [],
+			"world_events": {
+				"bot_hits": 11,
+				"pickups_taken": 10,
+				"shots": 114,
+				"tree_hits": 102
+			}
+		},
+		{
+			"actors_at_end": 72,
+			"checksum": 3456157062,
+			"client_stats": {
+				"destroys": 100,
+				"entries": 26824,
+				"reliable_pkts": 194,
+				"stale": 0,
+				"tomb_blocked": 0,
+				"unknown": 0,
+				"update_pkts": 958,
+				"upserts": 172
+			},
+			"client_upstream_bytes_wire": 298152,
+			"clients": 3,
+			"config": "saturated_priority_on",
+			"join": {
+				"avg_bytes_per_entry": 21.1779710144928,
+				"cells_visited": 0,
+				"clients": 3,
+				"cpu_us_avg_per_client_nettick": 457.816666666667,
+				"cpu_us_max": 887,
+				"entries": 5175,
+				"entries_per_s_per_client": 862.5,
+				"fields": 31032,
+				"heavy_actors": [
+					{
+						"bytes": 3783,
+						"cls": "player",
+						"entries": 180,
+						"id": 1
+					},
+					{
+						"bytes": 3783,
+						"cls": "player",
+						"entries": 180,
+						"id": 2
+					},
+					{
+						"bytes": 3783,
+						"cls": "player",
+						"entries": 180,
+						"id": 3
+					},
+					{
+						"bytes": 3783,
+						"cls": "bot",
+						"entries": 180,
+						"id": 300
+					},
+					{
+						"bytes": 3783,
+						"cls": "bot",
+						"entries": 180,
+						"id": 301
+					},
+					{
+						"bytes": 3783,
+						"cls": "bot",
+						"entries": 180,
+						"id": 302
+					},
+					{
+						"bytes": 3783,
+						"cls": "bot",
+						"entries": 180,
+						"id": 303
+					},
+					{
+						"bytes": 3783,
+						"cls": "bot",
+						"entries": 180,
+						"id": 304
+					},
+					{
+						"bytes": 3783,
+						"cls": "bot",
+						"entries": 180,
+						"id": 305
+					},
+					{
+						"bytes": 3783,
+						"cls": "bot",
+						"entries": 180,
+						"id": 306
+					}
+				],
+				"kb_s_per_client": 18.9453125,
+				"kb_s_total": 56.8359375,
+				"known_avg": 71.05,
+				"known_max": 72,
+				"overhead_bytes": 6804,
+				"packets": 189,
+				"packets_per_s_per_client": 31.5,
+				"payload_bytes": 109596,
+				"peak_100ms_kb_s_total": 66.50390625,
+				"per_class": {
+					"bot": {
+						"bytes": 30264,
+						"entries": 1440,
+						"entries_per_s": 720.0,
+						"kb_s": 14.77734375
+					},
+					"cloud": {
+						"bytes": 6072,
+						"entries": 288,
+						"entries_per_s": 144.0,
+						"kb_s": 2.96484375
+					},
+					"pickup": {
+						"bytes": 42246,
+						"entries": 2010,
+						"entries_per_s": 1005.0,
+						"kb_s": 20.6279296875
+					},
+					"player": {
+						"bytes": 11349,
+						"entries": 540,
+						"entries_per_s": 270.0,
+						"kb_s": 5.54150390625
+					},
+					"projectile": {
+						"bytes": 204,
+						"entries": 12,
+						"entries_per_s": 6.0,
+						"kb_s": 0.099609375
+					},
+					"tree": {
+						"bytes": 18705,
+						"entries": 885,
+						"entries_per_s": 442.5,
+						"kb_s": 9.13330078125
+					}
+				},
+				"per_kind": {
+					"reliable": {
+						"bytes": 5244,
+						"entries": 219,
+						"packets": 12
+					},
+					"update": {
+						"bytes": 111156,
+						"entries": 4956,
+						"packets": 177
+					}
+				},
+				"relevance_checks": 0,
+				"reliable_ops": {
+					"destroy": 3,
+					"spawn": 216,
+					"state": 0
+				},
+				"seconds": 2.0,
+				"series_kb": [
+					56.326171875,
+					55.505859375,
+					1.83984375
+				],
+				"wire_bytes": 116400
+			},
+			"join_known": [
+				71,
+				71,
+				71
+			],
+			"level_actors": 68,
+			"link_out_bytes": 1651908,
+			"link_out_packets": 3990,
+			"net_out_bytes_wire": 1763628,
+			"quality": {
+				"err_avg_px": 1.00676898173354,
+				"err_max_px": 5.333984375,
+				"err_p95_px": 5.3330078125,
+				"missing": 0,
+				"per_class_err_px": {
+					"bot": 1.53639080581405,
+					"cloud": 0.119293014724533,
+					"pickup": 0.0,
+					"player": 2.95302456999911,
+					"projectile": 5.3332065489234,
+					"tree": 0.0
+				},
+				"samples": 300,
+				"visible": 6407
+			},
+			"seconds": 30,
+			"steady": {
+				"avg_bytes_per_entry": 21.1093350131895,
+				"cells_visited": 0,
+				"clients": 3,
+				"cpu_us_avg_per_client_nettick": 518.655925925926,
+				"cpu_us_max": 5580,
+				"entries": 76197,
+				"entries_per_s_per_client": 846.633333333333,
+				"fields": 455400,
+				"heavy_actors": [
+					{
+						"bytes": 56700,
+						"cls": "player",
+						"entries": 2700,
+						"id": 1
+					},
+					{
+						"bytes": 56700,
+						"cls": "player",
+						"entries": 2700,
+						"id": 2
+					},
+					{
+						"bytes": 56700,
+						"cls": "player",
+						"entries": 2700,
+						"id": 3
+					},
+					{
+						"bytes": 56700,
+						"cls": "bot",
+						"entries": 2700,
+						"id": 300
+					},
+					{
+						"bytes": 56700,
+						"cls": "bot",
+						"entries": 2700,
+						"id": 301
+					},
+					{
+						"bytes": 56700,
+						"cls": "bot",
+						"entries": 2700,
+						"id": 302
+					},
+					{
+						"bytes": 56700,
+						"cls": "bot",
+						"entries": 2700,
+						"id": 303
+					},
+					{
+						"bytes": 56700,
+						"cls": "bot",
+						"entries": 2700,
+						"id": 304
+					},
+					{
+						"bytes": 56700,
+						"cls": "bot",
+						"entries": 2700,
+						"id": 305
+					},
+					{
+						"bytes": 56700,
+						"cls": "bot",
+						"entries": 2700,
+						"id": 306
+					}
+				],
+				"kb_s_per_client": 18.7303385416667,
+				"kb_s_total": 56.191015625,
+				"known_avg": 72.8711111111111,
+				"known_max": 76,
+				"overhead_bytes": 117720,
+				"packets": 3270,
+				"packets_per_s_per_client": 36.3333333333333,
+				"payload_bytes": 1608468,
+				"peak_100ms_kb_s_total": 60.1171875,
+				"per_class": {
+					"bot": {
+						"bytes": 453600,
+						"entries": 21600,
+						"entries_per_s": 720.0,
+						"kb_s": 14.765625
+					},
+					"cloud": {
+						"bytes": 75600,
+						"entries": 3600,
+						"entries_per_s": 120.0,
+						"kb_s": 2.4609375
+					},
+					"pickup": {
+						"bytes": 536508,
+						"entries": 25548,
+						"entries_per_s": 851.6,
+						"kb_s": 17.464453125
+					},
+					"player": {
+						"bytes": 170100,
+						"entries": 8100,
+						"entries_per_s": 270.0,
+						"kb_s": 5.537109375
+					},
+					"projectile": {
+						"bytes": 107580,
+						"entries": 5349,
+						"entries_per_s": 178.3,
+						"kb_s": 3.501953125
+					},
+					"tree": {
+						"bytes": 252000,
+						"entries": 12000,
+						"entries_per_s": 400.0,
+						"kb_s": 8.203125
+					}
+				},
+				"per_kind": {
+					"reliable": {
+						"bytes": 30588,
+						"entries": 597,
+						"packets": 570
+					},
+					"update": {
+						"bytes": 1695600,
+						"entries": 75600,
+						"packets": 2700
+					}
+				},
+				"relevance_checks": 0,
+				"reliable_ops": {
+					"destroy": 297,
+					"spawn": 300,
+					"state": 0
+				},
+				"seconds": 30.0,
+				"series_kb": [
+					54.029296875,
+					56.619140625,
+					56.255859375,
+					56.126953125,
+					56.4375,
+					56.30859375,
+					56.255859375,
+					56.4375,
+					56.630859375,
+					56.126953125,
+					56.513671875,
+					56.126953125,
+					56.138671875,
+					55.6875,
+					56.07421875,
+					55.93359375,
+					56.07421875,
+					56.232421875,
+					56.654296875,
+					55.998046875,
+					56.126953125,
+					55.81640625,
+					56.30859375,
+					56.0625,
+					56.33203125,
+					55.93359375,
+					56.203125,
+					56.4375,
+					55.869140625,
+					56.138671875,
+					1.83984375
+				],
+				"wire_bytes": 1726188
+			},
+			"techniques": [
+				"priority"
+			],
+			"world_events": {
+				"bot_hits": 11,
+				"pickups_taken": 10,
+				"shots": 114,
+				"tree_hits": 102
+			}
+		}
+	]
+}

@@ -1,0 +1,7 @@
+[SCN] T4 (175±25 мс, 4% потерь, движение и рывки) role=host preset=2 predict_dash=1 lag=175 jitter=25 loss=4.0
+[NET] LISTEN SERVER started on port 24804 (host plays as player 0)
+[NET] client joined t=1127
+[MATCH] playing t=4716
+[DASH] SERVER REJECTED t=16519 player=1 reason=cooldown
+[RESULT] role=host case=T4 remote_player_stats={ "dash_rejects": 1, "gap_fills": 349, "dups": 6774, "late": 0, "bad_inputs": 0 } tick=3415
+[SCN] exit done (0)

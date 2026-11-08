@@ -97,6 +97,7 @@ func _init() -> void:
 	run("server rate-limits commands (speed hack)", t_rate)
 	run("server fills gap with held input", t_gap)
 	run("server rejects malformed commands", t_malformed)
+	run("huge seq jump only desyncs the sender (no speed-up, others untouched)", t_seq_jump)
 	# --- сеть
 	run("netemu delays by lag", t_emu_lag)
 	run("netemu loss rate close to configured", t_emu_loss)
@@ -114,6 +115,7 @@ func _init() -> void:
 	run("overlapping key presses: responses matched in press order", t_overlap)
 	run("reconciliation replays pending commands (exact state)", t_replay_exact)
 	run("owner snapshot ignored if older than last ack", t_old_snapshot)
+	run("prediction path: server point + one point per pending command", t_pending_path)
 	run("remote interpolation lerps between snapshots", t_interp)
 	run("bot scenarios produce inputs and finish", t_bots)
 
@@ -300,7 +302,23 @@ func t_malformed() -> void:
 	sv.receive_cmds(99, [PlayerSim.make_cmd(1, Vector2.RIGHT, false)])    # неизвестный peer — без падения
 
 
+func t_seq_jump() -> void:
+	# Клиент сам выбирает seq. Огромный скачок вредит только ему (его следующие команды сочтутся «старыми»),
+	# но НЕ ускоряет его (восполнение пропуска ограничено MAX_GAP_FILL) и не трогает других игроков.
+	var sv := ServerSim.new()
+	sv.add_player(1, Vector2(100, 100))
+	sv.add_player(2, Vector2(100, 400))
+	sv.receive_cmds(1, [PlayerSim.make_cmd(1_000_000, Vector2.RIGHT, false)])
+	for _i in 5:
+		sv.tick()
+	var moved: float = sv.players[1]["state"].pos.x - 100.0
+	check(moved <= 220.0 / 60.0 + 0.01, "at most one real step of input, got %f px" % moved)
+	check(sv.stats["gap_fills"] == ServerSim.MAX_GAP_FILL, "gap fill capped")
+	check(sv.players[2]["state"].pos.is_equal_approx(Vector2(100, 400)), "other player untouched")
+
+
 # ---------------------------------------------------------------- эмуляция сети
+
 
 func t_emu_lag() -> void:
 	var e := NetEmu.new(1); e.configure(100.0, 0.0, 0.0)
@@ -479,6 +497,23 @@ func t_old_snapshot() -> void:
 	var old := {"ack": ack_before - 3, "state": PlayerState.new().to_dict(), "rej": 0, "why": "", "tick": 1}
 	lp.cp.on_owner_snapshot(old)
 	check(lp.cp.last_ack == ack_before and lp.cp.corrections == 0, "stale snapshot ignored")
+
+
+func t_pending_path() -> void:
+	# lag 100 мс: неподтверждённых команд заведомо несколько; путь = точка сервера + по точке на команду.
+	var lp := Loop.new(100.0)
+	lp.run_ticks(40, Vector2.RIGHT)
+	var path := lp.cp.pending_path()
+	check(lp.cp.pending.size() > 3, "there are pending commands (%d)" % lp.cp.pending.size())
+	check(path.size() == lp.cp.pending.size() + 1, "path size %d vs pending %d" % [path.size(), lp.cp.pending.size()])
+	check(path[0].is_equal_approx(lp.cp.last_server_state.pos), "path starts at authoritative position")
+	approx(path[path.size() - 1].x, lp.cp.state.pos.x, 0.01, "path ends at predicted position")
+	var mono := true
+	for i in range(1, path.size()):
+		mono = mono and path[i].x > path[i - 1].x     # бежим вправо по свободной арене
+	check(mono, "path is monotonic")
+	approx(lp.cp.prediction_lead_px(), lp.cp.state.pos.distance_to(lp.cp.last_server_state.pos), 0.001, "lead")
+	check(lp.cp.prediction_lead_px() > 5.0, "client is ahead of the server while lagging")
 
 
 func t_interp() -> void:

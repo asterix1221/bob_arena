@@ -50,6 +50,14 @@ enum class PacketType : std::uint8_t {
     Movement = 3, // ПР №3: позиция игрока, ненадёжная (requiresAck = 0)
     Shoot    = 4, // ПР №3: выстрел, надёжная команда (requiresAck = 1)
     Ack      = 5, // ПР №3: подтверждение доставки надёжного пакета
+    // ---- Игровые типы (этап доработки игры на Godot; заголовок и версия формата НЕ менялись) ----
+    Hello     = 6,  // клиент -> сервер, надёжный: имя, цвет, версия игрового протокола
+    Welcome   = 7,  // сервер -> клиент, надёжный: результат входа, id игрока, параметры матча
+    Input     = 8,  // клиент -> сервер, ненадёжный: последние N команд ввода (избыточно)
+    Snapshot  = 9,  // сервер -> клиент, ненадёжный: полное состояние мира
+    GameEvent = 10, // сервер -> клиент, надёжный: попадание, подбор руны, смерть, начало/конец раунда
+    Leave     = 11, // любая сторона, надёжный: выход из игры
+    Roster    = 12, // хост -> клиенты, надёжный: список игроков лобби (id, цвет, имя)
 };
 
 // Общий заголовок пакета (8 байт "на проводе"):
@@ -144,6 +152,11 @@ std::optional<std::uint8_t>  ReadU8 (const std::uint8_t*& p, const std::uint8_t*
 std::optional<std::uint16_t> ReadU16(const std::uint8_t*& p, const std::uint8_t* end);
 std::optional<std::uint64_t> ReadU64(const std::uint8_t*& p, const std::uint8_t* end);
 
+void WriteU32(std::vector<std::uint8_t>& out, std::uint32_t v);
+void WriteI16(std::vector<std::uint8_t>& out, std::int16_t v);
+std::optional<std::uint32_t> ReadU32(const std::uint8_t*& p, const std::uint8_t* end);
+std::optional<std::int16_t>  ReadI16(const std::uint8_t*& p, const std::uint8_t* end);
+
 // ---- Сборка/разбор пакетов ----
 
 std::vector<std::uint8_t> SerializePing(std::uint16_t sequenceNumber, std::uint64_t clientSendTimeUs);
@@ -175,5 +188,128 @@ std::optional<AckPacket> ParseAck(const std::uint8_t* data, std::size_t size);
 // nullopt, если данных меньше kHeaderSize или встречен неизвестный тип
 // пакета/версия или requiresAck вне {0, 1} — датаграмма отбрасывается целиком.
 std::optional<Header> ReadHeader(const std::uint8_t* data, std::size_t size);
+
+// =====================================================================================
+// Игровые пакеты. Все числа — big-endian. Заголовок тот же (8 байт, версия 2), поэтому
+// ping_client_app / pong_server_app / ПР №3 остаются совместимыми. Строгие правила разбора:
+//   * Hello, Welcome, GameEvent, Leave — только requiresAck = 1 (надёжные);
+//   * Input, Snapshot — только requiresAck = 0 (ненадёжные, потерю перекрывает следующий пакет);
+//   * payloadSize == фактическому хвосту датаграммы; счётчики не больше лимитов; лишних байт нет.
+// =====================================================================================
+
+constexpr std::uint8_t kGameProtocolVersion = 1;
+constexpr std::size_t kMaxNameBytes = 16;
+constexpr std::size_t kMaxInputCmds = 16;
+constexpr std::size_t kMaxSnapshotPlayers = 8;
+constexpr std::size_t kMaxSnapshotRunes = 8;
+constexpr std::size_t kMaxOwnerStateBytes = 96;
+
+// Биты кнопок в InputCmd::buttons.
+constexpr std::uint8_t kBtnJump = 1, kBtnDash = 2, kBtnLight = 4, kBtnHeavy = 8, kBtnDown = 16, kBtnJumpHeld = 32;
+
+// Welcome::status
+constexpr std::uint8_t kWelcomeOk = 0, kWelcomeFull = 1, kWelcomeBadVersion = 2;
+
+// HELLO: gameProto u8 | colorIdx u8 | nameLen u8 | name[nameLen] (UTF-8, непрозрачные байты)
+struct HelloPacket {
+    std::uint16_t sequenceNumber;
+    std::uint8_t gameProto;
+    std::uint8_t colorIdx;
+    std::vector<std::uint8_t> name;
+};
+
+// WELCOME: status u8 | gameProto u8 | playerId u8 | serverTick u16 | tickRateHz u8 | seed u32
+struct WelcomePacket {
+    std::uint16_t sequenceNumber;
+    std::uint8_t status;
+    std::uint8_t gameProto;
+    std::uint8_t playerId;
+    std::uint16_t serverTick;
+    std::uint8_t tickRateHz;
+    std::uint32_t seed;
+};
+
+// INPUT: firstCmdSeq u16 | count u8 (1..16) | count x { axis i8 ; buttons u8 }
+// Команда i имеет номер firstCmdSeq + i (mod 65536). Позиций в команде нет — только ввод.
+struct InputCmd {
+    std::int8_t axis;
+    std::uint8_t buttons;
+};
+struct InputPacket {
+    std::uint16_t sequenceNumber;
+    std::uint16_t firstCmdSeq;
+    std::vector<InputCmd> cmds;
+};
+
+// SNAPSHOT: tick u16 | ackCmdSeq u16 | nPlayers u8 | players | ownerLen u8 | ownerState | nRunes u8 | runes
+//   PlayerEntry: id u8 | x i16 | y i16 | vx i16 | vy i16 | hp u8 | flags u8 | buffs u16   (13 байт)
+//   RuneEntry:   id u8 | type u8 | x i16 | y i16                                           (6 байт)
+// ownerState — непрозрачный блок полного состояния игрока-получателя (формат задаёт симуляция).
+struct PlayerEntry {
+    std::uint8_t id;
+    std::int16_t x, y, vx, vy;
+    std::uint8_t hp;
+    std::uint8_t flags;
+    std::uint16_t buffs;
+};
+struct RuneEntry {
+    std::uint8_t id, type;
+    std::int16_t x, y;
+};
+struct SnapshotPacket {
+    std::uint16_t sequenceNumber;
+    std::uint16_t tick;
+    std::uint16_t ackCmdSeq;
+    std::vector<PlayerEntry> players;
+    std::vector<std::uint8_t> ownerState;
+    std::vector<RuneEntry> runes;
+};
+
+// GAMEEVENT: eventId u16 | kind u8 | tick u16 | a u8 | b u8 | x i16 | y i16 | v i16   (13 байт)
+// Клиент обязан игнорировать повторы по eventId (reliable-канал не упорядочивает и может повторять).
+struct GameEventPacket {
+    std::uint16_t sequenceNumber;
+    std::uint16_t eventId;
+    std::uint8_t kind;
+    std::uint16_t tick;
+    std::uint8_t a, b;
+    std::int16_t x, y, v;
+};
+constexpr std::size_t kGameEventPayloadSize = 13;
+
+// LEAVE: reason u8
+struct LeavePacket {
+    std::uint16_t sequenceNumber;
+    std::uint8_t reason;
+};
+
+std::vector<std::uint8_t> SerializeHello(std::uint16_t seq, std::uint8_t gameProto, std::uint8_t colorIdx,
+                                          const std::vector<std::uint8_t>& name);
+std::vector<std::uint8_t> SerializeWelcome(std::uint16_t seq, const WelcomePacket& w);
+std::vector<std::uint8_t> SerializeInput(std::uint16_t seq, std::uint16_t firstCmdSeq,
+                                          const std::vector<InputCmd>& cmds);
+std::vector<std::uint8_t> SerializeSnapshot(std::uint16_t seq, const SnapshotPacket& s);
+std::vector<std::uint8_t> SerializeGameEvent(std::uint16_t seq, const GameEventPacket& e);
+std::vector<std::uint8_t> SerializeLeave(std::uint16_t seq, std::uint8_t reason);
+
+std::optional<HelloPacket> ParseHello(const std::uint8_t* data, std::size_t size);
+std::optional<WelcomePacket> ParseWelcome(const std::uint8_t* data, std::size_t size);
+std::optional<InputPacket> ParseInput(const std::uint8_t* data, std::size_t size);
+std::optional<SnapshotPacket> ParseSnapshot(const std::uint8_t* data, std::size_t size);
+std::optional<GameEventPacket> ParseGameEvent(const std::uint8_t* data, std::size_t size);
+std::optional<LeavePacket> ParseLeave(const std::uint8_t* data, std::size_t size);
+
+// ROSTER: count u8 (<= 8) | count x { id u8, color u8, flags u8 (бит0 хост, бит1 готов), nameLen u8, name[nameLen<=16] }
+constexpr std::size_t kMaxRoster = 8;
+struct RosterEntry {
+    std::uint8_t id, color, flags;
+    std::vector<std::uint8_t> name;
+};
+struct RosterPacket {
+    std::uint16_t sequenceNumber;
+    std::vector<RosterEntry> entries;
+};
+std::vector<std::uint8_t> SerializeRoster(std::uint16_t seq, const std::vector<RosterEntry>& entries);
+std::optional<RosterPacket> ParseRoster(const std::uint8_t* data, std::size_t size);
 
 } // namespace telemetry

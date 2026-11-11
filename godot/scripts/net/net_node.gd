@@ -7,6 +7,12 @@ extends RefCounted
 ##    без повторов) и после MAX_ATTEMPTS объявляет доставку проваленной;
 ##  * keepalive: Ping 4 раза в секунду каждому собеседнику -> Pong -> RTT/джиттер/потери; молчание 3 с = обрыв;
 ##  * статистика для net_graph: stats(peer).
+## ПР №6 — шифрование (включается `encryption = true` на ОБЕИХ сторонах; по умолчанию выключено, как в ПР №2-5):
+##  * клиент при add_peer() шлёт KEY_EXCHANGE (открытый ключ X25519), пока не получит ответ; пакеты, отправленные до конца
+##    handshake (например Hello), ждут в очереди и уходят уже зашифрованными;
+##  * хост создаёт собеседника по KEY_EXCHANGE, отвечает своим открытым ключом; ключ сессии = HKDF(X25519) (SecureSession);
+##  * после handshake ВСЁ (включая Ping/ACK) уходит в ENCRYPTED; открытые пакеты и пакеты с неверным тегом отбрасываются,
+##    повторы ловит окно счётчиков. Повторная передача надёжных пакетов запечатывается заново (новый nonce), seq остаётся.
 ## Нумерация seq — общий счётчик на собеседника (кроме ACK: seq ACK = подтверждаемый seq), 16 бит с переходом через 65535.
 
 signal peer_added(peer_id: int)
@@ -26,6 +32,16 @@ var timeout_us := 3_000_000          # молчание дольше этого 
 var accept_new_peers := false       # хост: новый собеседник создаётся только по Hello
 var bad_packets := 0
 var unknown_peer_drops := 0
+var encryption := false             # ПР №6: шифровать трафик (клиент начинает handshake, хост требует его)
+var max_peers := 32                 # ПР №6: потолок собеседников при шифровании (handshake дорог по CPU)
+var handshake_rate := 4             # ПР №6: новых handshake в секунду на хосте (защита CPU от потока поддельных KEY_EXCHANGE)
+var handshakes_done := 0
+var handshakes_rejected := 0
+var plaintext_rejected := 0
+var _hs_times: Array[int] = []
+
+const HANDSHAKE_RETRY_US := 300_000
+const HANDSHAKE_MAX_TRIES := 8
 
 
 class Peer extends RefCounted:
@@ -58,6 +74,15 @@ class Peer extends RefCounted:
 	var rx_high := -1
 	var rx_seen := {}
 	var rx_total := 0
+	# --- ПР №6 ---
+	var sec: SecureSession = null          # null — открытый текст (или handshake ещё идёт)
+	var hs_priv := PackedByteArray()       # клиент: эфемерный закрытый ключ, пока нет ответа
+	var hs_pub := PackedByteArray()
+	var hs_tries := 0
+	var hs_last_us := 0
+	var hs_client_pub := PackedByteArray() # хост: ключ клиента и наш ответ — для повторного ответа на повтор KEY_EXCHANGE
+	var hs_reply := PackedByteArray()
+	var queued: Array = []                 # клиент: [[builder, reliable], ...] — отправки, ждущие конца handshake
 
 	func note_rx_seq(seq: int) -> void:
 		rx_total += 1
@@ -101,6 +126,15 @@ func _init(l: Link) -> void:
 
 
 func add_peer(id: int) -> Peer:
+	var p := _new_peer(id)
+	if encryption:
+		p.hs_priv = SecureSession.generate_private()
+		p.hs_pub = X25519.public_key(p.hs_priv)
+		_send_key_exchange(p, link.now_us())
+	return p
+
+
+func _new_peer(id: int) -> Peer:
 	var p := Peer.new()
 	p.id = id
 	p.last_rx_us = link.now_us()
@@ -108,6 +142,12 @@ func add_peer(id: int) -> Peer:
 	peers[id] = p
 	peer_added.emit(id)
 	return p
+
+
+func _send_key_exchange(p: Peer, now: int) -> void:
+	p.hs_tries += 1
+	p.hs_last_us = now
+	_transmit(p, Proto.key_exchange(0, p.hs_pub), false)
 
 
 func remove_peer(id: int, reason: String = "") -> void:
@@ -125,6 +165,11 @@ func send(peer_id: int, builder: Callable, reliable: bool) -> int:
 	if not peers.has(peer_id):
 		return -1
 	var p: Peer = peers[peer_id]
+	if encryption and p.sec == null:
+		# handshake ещё идёт: отправка ждёт его конца (seq выдаётся при реальной отправке)
+		if not p.hs_priv.is_empty():
+			p.queued.append([builder, reliable])
+		return -1
 	var seq := p.next_seq
 	p.next_seq = (p.next_seq + 1) & 0xFFFF
 	var raw: PackedByteArray = builder.call(seq)
@@ -139,8 +184,14 @@ func broadcast(builder: Callable, reliable: bool) -> void:
 		send(id, builder, reliable)
 
 
-func _transmit(p: Peer, raw: PackedByteArray) -> void:
+## raw — открытый внутренний пакет; при включённом шифровании запечатывается заново на КАЖДУЮ отправку (новый nonce).
+## seal=false — только для KEY_EXCHANGE.
+func _transmit(p: Peer, raw: PackedByteArray, seal: bool = true) -> void:
 	var now := link.now_us()
+	if seal and p.sec != null:
+		raw = p.sec.seal(raw)
+		if raw.is_empty():
+			return
 	p.bytes_out.add(raw.size() + 28, now)   # +28: IPv4 + UDP заголовки
 	p.pkts_out.add(1, now)
 	p.bytes_out_total += raw.size() + 28
@@ -154,6 +205,9 @@ func process() -> void:
 	for d in link.poll():
 		_on_datagram(int(d["peer"]), d["data"], now)
 	for p in peers.values():
+		if p.sec == null and encryption:
+			_handshake_tick(p, now)
+			continue
 		_retransmit(p, now)
 		_keepalive(p, now)
 	for id in peers.keys():
@@ -163,6 +217,29 @@ func process() -> void:
 
 
 func _on_datagram(peer_id: int, data: PackedByteArray, now: int) -> void:
+	var wire_size := data.size()
+	var head := Proto.read_header(data)
+	if head.is_empty():
+		bad_packets += 1
+		return
+	var ht: int = head["type"]
+	if ht == Proto.T_KEY_EXCHANGE or ht == Proto.T_ENCRYPTED:
+		if not encryption:
+			bad_packets += 1            # узел без шифрования handshake/ENCRYPTED не понимает
+			return
+		if ht == Proto.T_KEY_EXCHANGE:
+			_on_key_exchange(peer_id, data, now)
+			return
+		if not peers.has(peer_id) or (peers[peer_id] as Peer).sec == null:
+			unknown_peer_drops += 1
+			return
+		var r := (peers[peer_id] as Peer).sec.open(data)
+		if int(r["result"]) != SecureSession.OK:
+			return                       # подделка / повтор / не та сторона: молча отбрасываем (счётчики — в SecureSession)
+		data = r["inner"]
+	elif encryption:
+		plaintext_rejected += 1         # шифрование включено: открытый текст не принимаем
+		return
 	var msg := Proto.parse(data)
 	if msg.is_empty():
 		bad_packets += 1
@@ -175,9 +252,9 @@ func _on_datagram(peer_id: int, data: PackedByteArray, now: int) -> void:
 			return
 	var p: Peer = peers[peer_id]
 	p.last_rx_us = now
-	p.bytes_in.add(data.size() + 28, now)
+	p.bytes_in.add(wire_size + 28, now)
 	p.pkts_in.add(1, now)
-	p.bytes_in_total += data.size() + 28
+	p.bytes_in_total += wire_size + 28
 	var t: int = msg["type"]
 	if t == Proto.T_ACK:
 		var info := p.channel.on_ack(int(msg["acked"]), now)
@@ -215,6 +292,74 @@ func _on_datagram(peer_id: int, data: PackedByteArray, now: int) -> void:
 				p.ping_hist.pop_front()
 		return
 	message.emit(peer_id, msg)
+
+
+# ------------------------------------------------------------------ ПР №6: handshake
+
+func _on_key_exchange(peer_id: int, data: PackedByteArray, now: int) -> void:
+	var kx := Proto.parse_key_exchange(data)
+	if kx.is_empty():
+		bad_packets += 1
+		return
+	var their_pub: PackedByteArray = kx["pub"]
+	if peers.has(peer_id):
+		var p: Peer = peers[peer_id]
+		if p.sec == null:
+			# КЛИЕНТ: пришёл ответ хоста на наш KEY_EXCHANGE
+			if p.hs_priv.is_empty():
+				return
+			var key := SecureSession.derive_key(p.hs_priv, their_pub)
+			if key.is_empty():
+				handshakes_rejected += 1       # недопустимый ключ (точка малого порядка) — ждём честный ответ
+				return
+			p.sec = SecureSession.new(key, false)
+			p.hs_priv = PackedByteArray()
+			p.last_rx_us = now
+			handshakes_done += 1
+			var q := p.queued
+			p.queued = []
+			for item in q:
+				send(peer_id, item[0], item[1])
+		elif accept_new_peers and p.hs_client_pub == their_pub and not p.hs_reply.is_empty():
+			link.send(peer_id, p.hs_reply)     # клиент не получил ответ и повторил запрос — отвечаем тем же
+		elif accept_new_peers:
+			handshakes_rejected += 1           # другой ключ при живой сессии: подмену сессии не допускаем
+		return                                 # (клиент: запоздалый дубль ответа хоста — просто игнорируем)
+	if not accept_new_peers:
+		unknown_peer_drops += 1
+		return
+	# ХОСТ: новый клиент. Лимит частоты и числа собеседников — handshake дорог по CPU.
+	while not _hs_times.is_empty() and now - _hs_times[0] > 1_000_000:
+		_hs_times.pop_front()
+	if _hs_times.size() >= handshake_rate or peers.size() >= max_peers:
+		handshakes_rejected += 1
+		return
+	var priv := SecureSession.generate_private()
+	var key2 := SecureSession.derive_key(priv, their_pub)
+	if key2.is_empty():
+		handshakes_rejected += 1
+		return
+	_hs_times.append(now)
+	var np := _new_peer(peer_id)
+	np.sec = SecureSession.new(key2, true)
+	np.hs_client_pub = their_pub
+	np.hs_reply = Proto.key_exchange(0, X25519.public_key(priv))
+	handshakes_done += 1
+	link.send(peer_id, np.hs_reply)
+
+
+## Клиент: повторяет KEY_EXCHANGE, пока нет ответа; после HANDSHAKE_MAX_TRIES сообщает о провале (как недоставленный Hello).
+func _handshake_tick(p: Peer, now: int) -> void:
+	if p.hs_priv.is_empty():
+		return
+	if p.hs_tries >= HANDSHAKE_MAX_TRIES:
+		if now - p.hs_last_us > HANDSHAKE_RETRY_US:
+			p.hs_priv = PackedByteArray()
+			p.queued.clear()
+			reliable_failed.emit(p.id, 0)
+		return
+	if now - p.hs_last_us >= HANDSHAKE_RETRY_US:
+		_send_key_exchange(p, now)
 
 
 func _retransmit(p: Peer, now: int) -> void:
@@ -274,5 +419,9 @@ func stats(peer_id: int) -> Dictionary:
 		"reliable_failed": p.failed_count, "dup_dropped": p.dup_dropped,
 		"ack_avg_ms": (float(p.ack_time_sum_us) / 1000.0 / float(p.acks_ok)) if p.acks_ok > 0 else 0.0,
 		"since_rx_ms": float(now - p.last_rx_us) / 1000.0,
+		"enc": p.sec != null, "enc_pending": encryption and p.sec == null,
+		"auth_fail": p.sec.auth_fail if p.sec != null else 0,
+		"replay_drops": p.sec.replay_drops if p.sec != null else 0,
+		"plain_rejected": plaintext_rejected,
 		"rtt_hist": p.rtt_hist.duplicate(),
 	}

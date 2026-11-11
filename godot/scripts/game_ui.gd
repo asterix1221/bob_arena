@@ -14,6 +14,7 @@ signal quit_requested
 signal net_preset_changed(index: int)
 signal vsync_changed(index: int)
 signal predict_changed(on: bool)
+signal encryption_changed(on: bool)       # ПР №6: шифрование трафика (действует на следующее подключение/хост)
 signal viz_changed(index: int)
 signal models_changed(sprites: bool)
 signal repl_open_requested(preset: String)      # ПР №5: открыть лабораторию репликации (preset: "baseline" | "optimized")
@@ -34,6 +35,7 @@ var lab: Control                    # ПР №5: экран лаборатори
 var pause: Control
 var countdown_label: Label
 var net_graph: NetGraph
+var enc_opt: OptionButton                 # ПР №6: выбор шифрования в меню
 
 var name_edit: LineEdit
 var ip_edit: LineEdit
@@ -235,6 +237,17 @@ func _build_menu(root: Control) -> void:
 	vs.item_selected.connect(func(i: int) -> void: vsync_changed.emit(i))
 	srow.add_child(vs)
 	vb.add_child(srow)
+	var erow := HBoxContainer.new()
+	erow.add_theme_constant_override("separation", 8)
+	erow.add_child(_label("Шифрование (ПР №6):", 14))
+	enc_opt = OptionButton.new()
+	enc_opt.add_item("Выкл (открытый текст)")
+	enc_opt.add_item("Вкл (X25519 + AES-256-GCM)")
+	enc_opt.focus_mode = Control.FOCUS_NONE
+	enc_opt.item_selected.connect(func(i: int) -> void: encryption_changed.emit(i == 1))
+	erow.add_child(enc_opt)
+	erow.add_child(_label("(обе стороны должны совпадать)", 12, Color(0.65, 0.7, 0.8)))
+	vb.add_child(erow)
 	vb.add_child(_pred_settings_row(14))
 	var rrow := HBoxContainer.new()
 	rrow.add_theme_constant_override("separation", 8)

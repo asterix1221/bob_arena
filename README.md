@@ -971,3 +971,139 @@ git push -u origin feature/replication-optimization   # затем Pull Request 
    Теперь один `UPSERT` с полным состоянием и `tick`, плюс «надгробия» удалённых id — тесты `t_dormancy` (30% потерь) и `t_reorder`.
 3. **Ложные «пропажи» в метрике.** Снаряд, созданный в этот же тик, доезжает до клиента за 1–2 сетевых тика; без поправки на `born_tick` метрика «видимых акторов нет у клиента» показывала ~0,7% и в baseline.
 4. **Ошибка внутри тестовой функции не считалась провалом** (скриптовая ошибка прерывает функцию, а счётчик `failed` не растёт). Поэтому вывод тестов при разработке проверялся ещё и на `SCRIPT ERROR` (`... | grep -E "ERROR|FAIL|тестов"`).
+
+
+---
+
+# Практическая работа №6 — шифрование UDP-трафика и защита от DDoS (в игре на Godot 4)
+
+Условие (PDF «Шифрование UDP-трафика и защита от DDoS»): обмен ключами при первом соединении (Диффи–Хеллман), `EncryptAES()` / `DecryptAES()` на AES-256, Wireshark «до/после», негативный тест
+(подмена байта), затем Spectrum-приложение Cloudflare для игрового UDP-порта и два документа — `docs/Security.md` и `docs/Cloudflare_Spectrum_Setup.md`. С преподавателем договорились делать **в Godot, а не в Unreal Engine**
+(в самом PDF Unreal не упоминается, но вся игра — Godot). Шифрование встроено и в игру (`NetNode`), и в C++-часть ПР №1–3 (OpenSSL 3), чтобы две независимые реализации доказали совместимость друг с другом.
+
+## Как условие разбито на подзадачи
+
+| № | Требование PDF | Что сделано | Где и чем проверено |
+|---|---|---|---|
+| 1 | Типы `KEY_EXCHANGE`, `ENCRYPTED`, заголовок открыт | **`KEY_EXCHANGE = 15`, `ENCRYPTED = 16`** (в задании 10 и 11, но в проекте они заняты `GAME_EVENT`/`LEAVE`, а 13–14 — ПР №5); заголовок 8 байт остаётся открытым и идёт в AAD; приложение в `docs/Protocol_Specification.md` | `tests/test_crypto.cpp` (разбор, строгие проверки), `run_crypto_tests.gd` |
+| 2 | Обмен ключами X25519 + HKDF, таблица сессий по адресу | `crypto/crypto.cpp` (OpenSSL: `GenerateKeyPair`, `DeriveSessionKey`); в Godot — X25519 и HKDF на GDScript (`godot/scripts/crypto/`); сервер хранит сессии по адресу (`std::map<"ip:port", Session>` / `NetNode.peers`); повтор `KEY_EXCHANGE` клиентом, идемпотентный ответ хоста, лимит handshake | RFC 7748, независимый эталон (Python `cryptography`), совпадение с OpenSSL байт-в-байт, потери 30%, поддельные ключи |
+| 3 | `EncryptAES()`/`DecryptAES()` на AES-256 (GCM), nonce — счётчик, не `rand()` | C++: `EncryptAES`/`DecryptAES` (AES-256-GCM, nonce = 4 нуля + счётчик u64, старший бит — направление); Godot: `AesGcm` (GCM собран из `AESContext` ECB: CTR + GHASH, т. к. в Godot есть только ECB/CBC) | векторы NIST, 10 длин против OpenSSL, подмена каждого байта пакета |
+| 4 | Интеграция в отправку/приём, ACK и повторы продолжают работать | `SealPacket`/`OpenPacket` (C++), `SecureSession` и `NetNode` (Godot): повторная передача запечатывается заново с **новым nonce**, `seq` и `requiresAck` в открытом заголовке; окно защиты от повторов (1024) | потери 30%: 8/8 выстрелов, дубликаты отброшены по `seq`; игра ПР №4 с 2 клиентами, 3% потерь, ни одного `AUTH_FAIL` |
+| 5 | Запуск на 127.0.0.1, Wireshark «до/после» | Реальный захват `tcpdump` двух процессов Godot: `docs/captures/before.pcap`, `after.pcap` (открываются в Wireshark); картинки `docs/img/capture_*.png` — вывод tshark. Скриншоты окна Wireshark — **снять самому** (инструкция в `docs/Security.md`, раздел 2) | до: типы 1…12, имя игрока видно; после: только 15 и 16 |
+| 6 | Негативный тест: поменять байт шифртекста прокси-скриптом | `tools/udp_proxy.py --tamper` (UDP-прокси на Python), `--replay`, `--loss`; сервер пишет `AUTH_FAIL`, выстрел не применяется | шаг 6 `run_pr6_checks.ps1`, логи в `docs/Security.md`, раздел 6 |
+| 7 | Ветка `feature/encryption`, PR | команды ниже (в архиве `.git` не менялся) | — |
+| 8 | Cloudflare Spectrum: origin, приложение UDP :9000, DNS, клиент на `game.example.com:9000`, лог с IP Cloudflare | `docs/Cloudflare_Spectrum_Setup.md`: схема, порядок действий, файрвол origin (только диапазоны Cloudflare), правила DDoS с обоснованием, SPP, ответы. **Реально не выполнено:** нужен аккаунт Cloudflare, а UDP в Spectrum — только Enterprise (платная надстройка; в документе цитата и ссылка). Локально проверено через прокси-эмулятор | `tools/udp_proxy.py`: шифрование и ACK работают за прокси, сервер видит адрес прокси |
+| 9 | `docs/Security.md` со схемой, алгоритмами, скриншотами, ограничением MITM; ответы на 4 вопроса | `docs/Security.md` (10 разделов, включая «что проверялось, а что нет») | — |
+
+## Что добавлено (структура)
+
+```
+crypto/crypto.h, crypto.cpp           — X25519 + HKDF-SHA256 + AES-256-GCM на OpenSSL 3 (KeyPair, DeriveSessionKey, EncryptAES, DecryptAES)
+crypto/secure_channel.h, .cpp         — SealPacket/OpenPacket, Session, ReplayWindow (окно повторов 1024)
+protocol/protocol.h, protocol.cpp     — + PacketType::KeyExchange = 15, Encrypted = 16, SerializeKeyExchange/ParseKeyExchange, CheckEncryptedHeader
+server/secure_server.cpp              — secure_server_app: handshake, таблица сессий, ENCRYPTED PING/MOVEMENT/SHOOT, ACK, дедупликация, AUTH_FAIL в лог, --loss-percent
+client/secure_client.cpp              — secure_client_app: handshake с повтором, надёжные SHOOT с повтором по RTO (новый nonce на каждую отправку)
+tests/test_crypto.cpp                 — 19 тестов C++ (RFC 7748, эталон Python, подмена, replay, перестановка, направление, фаззинг)
+tests/crypto_selftest.cpp             — самопроверка из материалов задания (без правок логики)
+tools/gen_crypto_vectors.cpp          — эталонные байты из OpenSSL -> godot/tests/crypto_vectors.json
+tools/udp_proxy.py                    — прокси «злоумышленник посередине» (--tamper, --replay, --loss) и имитация «сервер видит адрес прокси»
+godot/scripts/crypto/x25519.gd        — X25519 на GDScript (по TweetNaCl), hkdf.gd — HKDF-SHA256, aes_gcm.gd — AES-256-GCM, secure_session.gd — сессия
+godot/scripts/net/proto.gd            — + T_KEY_EXCHANGE, T_ENCRYPTED, key_exchange(), encrypted_header(), check_encrypted()
+godot/scripts/net/net_node.gd         — + encryption, handshake (повтор, очередь отправок), запечатывание на каждую отправку, отказ от открытого текста, лимит handshake
+godot/scripts/app.gd, game_ui.gd      — + переключатель «Шифрование (ПР №6)» в меню, флаг --encrypt=1, строка «Шифрование» в net_graph (F3)
+godot/tests/run_crypto_tests.gd       — 22 теста; godot/tests/run_app_tests.gd — + сквозной тест двух приложений с шифрованием
+run_pr6_checks.ps1                    — всё одной командой (сборка C++, тесты, векторы, реальный UDP, Godot, негативный тест)
+run_godot_demo.ps1                    — + параметр -Encrypt; docs/Security.md, docs/Cloudflare_Spectrum_Setup.md, docs/captures/*.pcap, docs/img/capture_*.png
+```
+
+## Как это работает
+
+1. Клиент генерирует эфемерную пару X25519 и шлёт `KEY_EXCHANGE` (тип 15, 32 байта) — повторяет каждые 300 мс, пока нет ответа. Игровые пакеты, отправленные до конца handshake (например `HELLO`), ждут в очереди.
+2. Хост отвечает своим ключом; обе стороны считают `HKDF-SHA256(X25519(свой закрытый, чужой открытый), info = "game-udp-v1")` — ключ AES-256-GCM на сессию. Хост хранит сессию по адресу клиента.
+3. Дальше всё — `ENCRYPTED` (тип 16): `[заголовок 8 Б открыт, AAD][nonce 12 = 4 нуля + счётчик u64][шифртекст = тип внутр. пакета + payload][tag 16]`. Счётчик растёт на **каждую** отправку, включая повторную передачу;
+   старший бит счётчика — направление (ключ общий для обоих направлений). На приёме: форма → окно повторов (проверка без записи) → расшифровка и проверка tag → запись в окно → восстановление внутреннего пакета, который идёт в прежний код.
+4. Любая ошибка (подделка, повтор, открытый текст, неверный handshake) — пакет молча отбрасывается и считается (`AUTH_FAIL` в логе C++, счётчики в net_graph).
+5. Игра по умолчанию **без** шифрования (как в ПР №2–5, чтобы не менять числа прежних отчётов); включается `--encrypt=1` (или переключателем в меню) — **и на хосте, и на клиенте**.
+
+## Результат (прогон `run_pr6_checks.ps1` при подготовке: Linux, Godot 4.7.2, OpenSSL 3.0.13)
+
+| Что | Результат |
+|-|-|
+| Трафик игры до/после (реальный захват `tcpdump` двух процессов Godot, по 400 датаграмм в `docs/captures`) | до: типы 1…12, имена «Клиент»/«Хост» читаются; после: 2 × `KEY_EXCHANGE` + 398 × `ENCRYPTED`, имён и координат нет; средний размер данных 53,8 → 82,9 байта (+29 Б на датаграмму) |
+| Подмена бита шифртекста прокси (`--tamper`) | сервер: 8 × `AUTH_FAIL`, выстрелов применено 0; клиент: «не доставлено» после повторов; пока порча идёт, сессия жива |
+| Replay (`--replay`) | каждая копия — `REPLAY`, каждый `SHOOT` применён один раз |
+| Потери 30% в каждую сторону | все выстрелы подтверждены; повторная передача идёт с новым nonce; дубликаты отброшены по `seq`; `AUTH_FAIL` = 0 |
+| Скорость GDScript | X25519 ≈ 40–55 мс (раз за сессию, ≈ 100 мс на handshake; замер в Linux, на вашем ПК будет иначе), запечатать/открыть 100 байт ≈ 0,07 мс |
+| Игра ПР №4 (2 клиента, 30 мс, 3% потерь, бой) поверх шифрования | снимки и события идут, ни одного `AUTH_FAIL`, предсказание работает |
+
+## Требования и запуск (Windows 11, PowerShell 7)
+
+Для C++-части нужен OpenSSL 3: в терминале MSYS2 UCRT64 `pacman -S mingw-w64-ucrt-x86_64-openssl` (g++ — как в разделе ПР №1; `C:\msys64\ucrt64\bin` в PATH, чтобы находились DLL). Для `tools/udp_proxy.py` и отчётов нужен python 3.
+Для Godot-части ничего дополнительного (OpenSSL не нужен: криптография написана на GDScript). Кириллица: консоль PowerShell переведена в UTF-8 внутри скриптов; C++-программы вызывают `enable_utf8_console()`.
+
+```powershell
+$g = "C:\Godot\Godot_v4.7.2-stable_win64_console.exe"
+.\run_pr6_checks.ps1 -Godot $g                              # всё сразу: сборка, тесты, реальный UDP, негативный тест
+.\run_godot_demo.ps1 -Godot $g -Role Both -Encrypt          # игра: хост и гость (два окна) с шифрованием; без -Encrypt — открытый текст
+.\run_godot_demo.ps1 -Godot $g -Role Bot -Encrypt           # тренировка с ботом по шифрованному UDP; в игре F3 — строка «Шифрование: AES-256-GCM…»
+.\run_godot_demo.ps1 -Godot $g -Role Tests                  # все наборы Godot, включая run_crypto_tests
+```
+
+C++ вручную (по одной строке; на Linux/macOS/Git Bash — без `.exe` и без `-lws2_32`):
+```powershell
+g++ -std=c++17 -O2 protocol/protocol.cpp crypto/crypto.cpp crypto/secure_channel.cpp reliability/adaptive_timeout.cpp reliability/reliable_channel.cpp reliability/dedup_window.cpp telemetry/transport.cpp server/secure_server.cpp -o secure_server_app.exe -lcrypto -lws2_32
+g++ -std=c++17 -O2 protocol/protocol.cpp crypto/crypto.cpp crypto/secure_channel.cpp reliability/adaptive_timeout.cpp reliability/reliable_channel.cpp reliability/dedup_window.cpp telemetry/transport.cpp client/secure_client.cpp -o secure_client_app.exe -lcrypto -lws2_32
+.\secure_server_app.exe 27019 --loss-percent=30 --seed=5          # сервер (порт по умолчанию 27019)
+.\secure_client_app.exe 127.0.0.1 27019 --count=8 --interval-ms=100 --max-attempts=10
+```
+Негативный тест и replay вручную (три окна): `.\secure_server_app.exe 27030` · `python tools\udp_proxy.py --listen 27031 --target 127.0.0.1:27030 --tamper` · `.\secure_client_app.exe 127.0.0.1 27031`
+(для replay — `--replay`; `--tamper-count 4` портит только первые 4 пакета и показывает, что повторная передача лечит).
+
+**Wireshark (скриншоты «до/после»):** установить Wireshark с Npcap, захват на «Adapter for loopback traffic capture», фильтр `udp.port == 24680` (порт игры по умолчанию); запустить `-Role Both` без `-Encrypt` (скриншот «до», открыть пакет SNAPSHOT, раздел Data) и с `-Encrypt`
+(«после»). Готовые захваты можно открыть вместо запуска игры: `docs/captures/before.pcap` и `after.pcap` (порты 24710 и 24711).
+
+## Тесты
+
+```powershell
+.\run_pr6_checks.ps1 -Godot $g          # ожидается: C++ 97 тестов (78 прежних + 19 новых), crypto_selftest 4 OK, векторы совпали, потери 0% и 30% — все SHOOT подтверждены, Godot crypto 22 теста, негативный тест OK
+.\run_godot_demo.ps1 -Godot $g -Role Tests   # ожидается: net 20, game 26, game_net 13, pred 10, view 5, app 5, udp 2, repl 23, crypto 21 (22 в `run_pr6_checks.ps1` — там добавляется тест совместимости с C++-сервером) — всё «0 провалено»
+```
+`run_crypto_tests.gd` (22 теста): X25519 по RFC 7748 и против OpenSSL, точка малого порядка, HKDF против OpenSSL, AES-GCM по векторам NIST и против OpenSSL (10 длин), подмена любого байта/AAD/ключа, запечатанные пакеты совпадают с C++ побайтно,
+`KEY_EXCHANGE`, туда-обратно всех типов пакетов, атаки (seq, requiresAck, payloadSize, шифртекст, повтор, перестановка, направление, мусор), `NetNode` (handshake и Hello из очереди, потери 30%, нет открытого текста в сети,
+подмена в пути, replay, открытый текст хосту, поддельные `KEY_EXCHANGE`, лимит handshake, таймаут и RTT), игра ПР №4 поверх шифрования, реальный UDP, **совместимость GDScript-клиента с C++ `secure_server_app`** (запускается при `-- --cpp-port=<порт>`).
+Каждый набор проверялся ещё и на `SCRIPT ERROR` в выводе — см. пункт 4 «Багов» ПР №5.
+
+## Git-workflow (ветка/PR)
+
+```powershell
+git switch main                                   # либо ветка с ПР №5, если он ещё не слит
+git switch -c feature/encryption
+git add crypto protocol server/secure_server.cpp client/secure_client.cpp tests/test_crypto.cpp tests/crypto_selftest.cpp tools/gen_crypto_vectors.cpp tools/udp_proxy.py tools/godot_check.sh
+git add godot/scripts godot/tests docs/Security.md docs/Cloudflare_Spectrum_Setup.md docs/Protocol_Specification.md docs/captures docs/img README.md run_pr6_checks.ps1 run_godot_demo.ps1 .gitignore
+git commit -m "ПР №6: шифрование UDP (X25519 + HKDF + AES-256-GCM) в C++ и в игре на Godot, защита от повторов, документация, Spectrum"
+git push -u origin feature/encryption             # затем Pull Request в main (GitVerse / GitHub)
+```
+(Git сообщит о смене окончаний строк LF↔CRLF — это нормально для Windows; новые файлы сохранены с CRLF, `.sh` — с LF.)
+
+## Известные ограничения и оговорки
+
+- **Голый DH не защищает от MITM** (нет аутентификации сервера): активный атакующий на пути ведёт два handshake. Исправление (подпись ключа сервера и pinning, сертификаты, PSK/HMAC, привязка транскрипта к HKDF) описано в `docs/Security.md`, раздел 7, не реализовано.
+- Криптография в Godot — **собственная реализация на GDScript** (в Godot 4.7 нет Curve25519, GCM и HKDF; есть только AES-ECB/CBC): проверена векторами RFC/NIST и совпадением с OpenSSL, но не даёт константного времени. Для продакшена — libsodium (GDExtension).
+- Открыты метаданные: тип 15/16, `seq`, `requiresAck`, длины и частота пакетов. Нет смены ключа внутри сессии; ключ один на оба направления (направление — в nonce). Сессия привязана к `ip:port`.
+- Шифрование включается на обеих сторонах одним флагом; режим «вместе» хост-шифрование/клиент-открытый не поддерживается (хост отбрасывает открытый текст, клиент сообщает о провале).
+- **Cloudflare Spectrum не выполнен:** нужен аккаунт; UDP — только Enterprise (платная надстройка). Всё подготовленное и проверенное локально — в `docs/Cloudflare_Spectrum_Setup.md` (в том числе чего нет: скриншотов панели и теста с настоящим Cloudflare).
+- **Не проверялось на Windows 11** (всё прогонялось в Linux: Godot 4.7.2, OpenSSL 3.0.13, pwsh 7.4): сборка C++ с MSYS2 OpenSSL, `run_godot_demo.ps1 -Encrypt`, окно Wireshark и его скриншоты. Скрипты PowerShell проверены разбором и прогоном под pwsh на Linux.
+- Картинки `docs/img/capture_*.png` — вывод tshark, а не окно Wireshark; для сдачи замените своими скриншотами.
+- Эмуляция сети в игре (профили lag100/lag175loss4) работает и при шифровании; числа отчётов ПР №4/№5 получены **без** шифрования и не пересчитывались (+29 байт на датаграмму изменили бы КБ/с в ПР №5).
+
+## Баги и нюансы, найденные в процессе разработки ПР №6
+
+1. **Каркас из материалов задания не работает «из коробки».** Клиент шифрует пакет с заголовком в AAD **до** того, как записывает в заголовок `payloadSize`, а сервер проверяет tag по заголовку из сети (с размером): `AUTH_FAIL` на каждом пакете (проверено запуском каркаса).
+   В моей реализации заголовок собирается с окончательным размером до шифрования; тесты на подмену `seq`/`requiresAck`/`payloadSize` это фиксируют.
+2. **Конфликт номеров типов:** `KEY_EXCHANGE = 10` и `ENCRYPTED = 11` из задания заняты `GAME_EVENT` и `LEAVE`; 13–14 заняты ПР №5. Взяты 15 и 16; C++-разбор по-прежнему не принимает 13 и 14 (тест из ПР №3 про «первый неизвестный тип» остался зелёным).
+3. **Повторная передача и защита от повторов.** Если повторить «байт в байт» тот же шифртекст, окно счётчиков примет его за replay и ACK не будет повторён. Поэтому повтор запечатывается заново с новым счётчиком, а дедупликацию делает `seq` (ПР №3).
+4. **Окно повторов нельзя обновлять до проверки tag:** иначе подделка с огромным счётчиком сдвинет окно и выбросит настоящие пакеты. Сначала `WouldAccept`, затем расшифровка, затем `Commit` (тест «подделка не сожгла счётчик»).
+5. **Ключ общий для обоих направлений** — без бита направления в nonce клиент и сервер выдали бы одинаковые пары «ключ + nonce» с первого же пакета. Бит направления проверяется на приёме (эхо собственного пакета отклоняется).
+6. **RTO после handshake маленький** (RTT ≈ 0 → RTO ≈ 100 мс), поэтому шесть попыток надёжного пакета заканчиваются за ~0,5 с. Тест подмены сначала «портил» пакеты дольше и получал «не доставлено»; теперь порча длится 250 мс, и видно, что повтор доставляет.
+7. **Проверка скрипта PowerShell ловит то, чего не ловит разбор:** `"$bin`tests_app"` — обратная кавёчка + `t` = символ табуляции (путь ломался); `-WindowStyle` не поддерживается `Start-Process` на Linux (на Windows работает). Исправлено прогоном `run_pr6_checks.ps1` под pwsh.
+8. Ошибка внутри тестовой функции GDScript по-прежнему не считается провалом (см. ПР №5, п. 4): в первом прогоне тест `t_attacks` падал скриптовой ошибкой — повторный вызов `open()` вместо сохранённого результата; поймано проверкой `SCRIPT ERROR`.

@@ -140,9 +140,12 @@ std::optional<Header> ReadHeader(const std::uint8_t* data, std::size_t size) {
     auto rawRequiresAck = ReadU8(p, end);
     if (!rawType || !seq || !payloadSize || !version || !rawRequiresAck) return std::nullopt;
 
-    if (*rawType < static_cast<std::uint8_t>(PacketType::Ping) ||
-        *rawType > static_cast<std::uint8_t>(PacketType::Roster)) {
-        return std::nullopt; // неизвестный тип пакета
+    const bool knownGameType = *rawType >= static_cast<std::uint8_t>(PacketType::Ping) &&
+                               *rawType <= static_cast<std::uint8_t>(PacketType::Roster);
+    const bool knownSecurityType = *rawType == static_cast<std::uint8_t>(PacketType::KeyExchange) ||
+                                   *rawType == static_cast<std::uint8_t>(PacketType::Encrypted);
+    if (!knownGameType && !knownSecurityType) {
+        return std::nullopt; // неизвестный тип пакета (13 и 14 — только Godot, C++ их не принимает)
     }
     if (*version != kProtocolVersion) {
         return std::nullopt; // несовместимая версия протокола
@@ -558,6 +561,40 @@ std::optional<RosterPacket> ParseRoster(const std::uint8_t* data, std::size_t si
     }
     if (p != end) return std::nullopt;
     return pkt;
+}
+
+// ====================== ПР №6: KEY_EXCHANGE / ENCRYPTED ======================
+
+std::vector<std::uint8_t> SerializeKeyExchange(std::uint16_t seq, const std::uint8_t publicKey[32]) {
+    std::vector<std::uint8_t> out;
+    out.reserve(kHeaderSize + kKeyExchangePayloadSize);
+    WriteHeaderFull(out, PacketType::KeyExchange, seq, kKeyExchangePayloadSize, false);
+    out.insert(out.end(), publicKey, publicKey + kKeyExchangePayloadSize);
+    return out;
+}
+
+std::optional<KeyExchangePacket> ParseKeyExchange(const std::uint8_t* data, std::size_t size) {
+    auto h = CheckGameHeader(data, size, PacketType::KeyExchange, false);
+    if (!h || h->payloadSize != kKeyExchangePayloadSize) return std::nullopt;
+    KeyExchangePacket pkt{};
+    pkt.sequenceNumber = h->sequenceNumber;
+    std::copy(data + kHeaderSize, data + kHeaderSize + kKeyExchangePayloadSize, pkt.publicKey);
+    return pkt;
+}
+
+std::vector<std::uint8_t> SerializeEncryptedHeader(std::uint16_t seq, bool requiresAck, std::size_t sealedSize) {
+    std::vector<std::uint8_t> out;
+    out.reserve(kHeaderSize);
+    WriteHeaderFull(out, PacketType::Encrypted, seq, sealedSize, requiresAck);
+    return out;
+}
+
+std::optional<Header> CheckEncryptedHeader(const std::uint8_t* data, std::size_t size) {
+    auto h = ReadHeader(data, size);
+    if (!h || h->packetType != PacketType::Encrypted) return std::nullopt;
+    if (size != kHeaderSize + h->payloadSize) return std::nullopt;
+    if (h->payloadSize < kEncryptedOverhead) return std::nullopt;
+    return h;
 }
 
 } // namespace telemetry

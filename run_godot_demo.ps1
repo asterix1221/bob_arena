@@ -14,6 +14,10 @@
   ReplProfile — ПР №5: профиль трафика «до/после» без окна (15 конфигураций), JSON в docs\repl, затем отчёты docs\Replication_*.md (нужен python).
 .PARAMETER Repl
   Для Role Lab (ПР №5): стартовый набор оптимизаций — optimized («после», по умолчанию) или baseline («до»).
+.PARAMETER Encrypt
+  ПР №6: включить шифрование трафика (X25519 + HKDF-SHA256 + AES-256-GCM; флаг --encrypt=1) для Host/Join/Both/Bot/Scenarios/Scenario.
+  Включать нужно и на хосте, и на клиенте: хост с шифрованием не принимает открытый текст, клиент с шифрованием не поймёт хост без него.
+  Включается и в меню (строка «Шифрование (ПР №6)»).
 .PARAMETER Predict
   1 — клиент предсказывает рывок сразу (по умолчанию), 0 — рывок виден только после ответа сервера. В игре: F4.
 .PARAMETER Viz
@@ -32,7 +36,8 @@ param(
     [ValidateSet("T1", "T2", "T3", "T4", "T5")][string]$Case = "T3",
     [ValidateSet("baseline", "optimized")][string]$Repl = "optimized",
     [string]$Name = "",
-    [switch]$DebugKeys
+    [switch]$DebugKeys,
+    [switch]$Encrypt
 )
 
 # Кириллица в консоли: вывод Godot — UTF-8.
@@ -57,15 +62,18 @@ if (-not (Test-Path $cache)) {
 }
 
 $preset = @{ none = 0; lag100 = 1; lag175loss4 = 2 }[$Profile]
+$encArg = if ($Encrypt) { " --encrypt=1" } else { "" }          # для строк ArgumentList (Start-Process)
+$encList = if ($Encrypt) { @("--encrypt=1") } else { @() }      # для прямого вызова & $Godot (пустой массив = ни одного лишнего аргумента)
 function Game-Args([string]$extra) {
     $a = "--path `"$Proj`" -- --preset=$preset --port=$Port --predict=$Predict --viz=$Viz $extra"
     if ($DebugKeys) { $a += " --debug" }
+    if ($Encrypt) { $a += " --encrypt=1" }
     return $a
 }
 
 switch ($Role) {
     "Tests" {
-        $suites = @("run_net_tests", "run_game_tests", "run_game_net_tests", "run_pred_tests", "run_view_tests", "run_app_tests", "run_udp_tests", "run_repl_tests")
+        $suites = @("run_net_tests", "run_game_tests", "run_game_net_tests", "run_pred_tests", "run_view_tests", "run_app_tests", "run_udp_tests", "run_repl_tests", "run_crypto_tests")
         $bad = 0
         foreach ($s in $suites) {
             $ErrorActionPreference = "Continue"
@@ -98,9 +106,9 @@ switch ($Role) {
             $p++
             $hl = Join-Path $runs "$c.host.log"; $cl = Join-Path $runs "$c.client.log"
             Remove-Item $hl, $cl -ErrorAction SilentlyContinue
-            $h = Start-Process -FilePath $Godot -PassThru -WindowStyle Hidden -ArgumentList "--headless --path `"$Proj`" -- --scenario=$c --role=host --port=$p --quit-after=90 --out=`"$hl`""
+            $h = Start-Process -FilePath $Godot -PassThru -WindowStyle Hidden -ArgumentList "--headless --path `"$Proj`" -- --scenario=$c --role=host --port=$p --quit-after=90 --out=`"$hl`"$encArg"
             for ($i = 0; $i -lt 100; $i++) { if ((Test-Path $hl) -and (Select-String -Path $hl -Pattern "LISTEN SERVER" -Quiet)) { break }; Start-Sleep -Milliseconds 200 }
-            & $Godot --headless --path $Proj -- --scenario=$c --role=client --join=127.0.0.1 --port=$p --quit-after=90 --out="$cl" | Out-Null
+            & $Godot --headless --path $Proj -- --scenario=$c --role=client --join=127.0.0.1 --port=$p --quit-after=90 --out="$cl" @encList | Out-Null
             $h | Wait-Process -Timeout 20 -ErrorAction SilentlyContinue
             $line = if (Test-Path $cl) { (Select-String -Path $cl -Pattern "^\[RESULT\] corrections" | Select-Object -First 1).Line } else { $null }
             "{0}: {1}" -f $c, $(if ($line) { $line } else { "НЕТ РЕЗУЛЬТАТА (см. логи)" })
@@ -111,10 +119,10 @@ switch ($Role) {
         # Один сценарий С ОКНАМИ: хост и клиент (клиентом управляет скрипт). Запишите окно клиента (OBS / Win+Alt+R).
         $hl = Join-Path $env:TEMP "bob_$Case.host.log"; $cl = Join-Path $env:TEMP "bob_$Case.client.log"
         Remove-Item $hl, $cl -ErrorAction SilentlyContinue
-        $h = Start-Process -FilePath $Godot -PassThru -ArgumentList "--path `"$Proj`" -- --scenario=$Case --role=host --port=$Port --out=`"$hl`""
+        $h = Start-Process -FilePath $Godot -PassThru -ArgumentList "--path `"$Proj`" -- --scenario=$Case --role=host --port=$Port --out=`"$hl`"$encArg"
         for ($i = 0; $i -lt 100; $i++) { if ((Test-Path $hl) -and (Select-String -Path $hl -Pattern "LISTEN SERVER" -Quiet)) { break }; Start-Sleep -Milliseconds 200 }
         Write-Host "Запись экрана: начните её сейчас (Win+Alt+R). Окно клиента запускается; сценарий идёт ~20 с."
-        & $Godot --path $Proj -- --scenario=$Case --role=client --join=127.0.0.1 --port=$Port --viz=$Viz --out="$cl"
+        & $Godot --path $Proj -- --scenario=$Case --role=client --join=127.0.0.1 --port=$Port --viz=$Viz --out="$cl" @encList
         $h | Wait-Process -Timeout 20 -ErrorAction SilentlyContinue
         Write-Host "Готово. Лог клиента: $cl"
     }

@@ -8,7 +8,8 @@ extends Node2D
 ## Параметры запуска (после --): --debug (читы F9-F11), --shots=<каталог> (автоскриншоты экранов),
 ## --lag-test (замер инпутлага), --host / --join=<ip> --port=<порт> --name=<имя> (прямой запуск),
 ## --predict=0|1 (предсказание рывка у клиента, F4), --viz=0..3 (визуализация предсказания, F8), --sprites=0|1 (спрайты/фигуры, F6),
-## --scenario=T1..T5 [--out=<лог>] (автоматический сценарий ПР №4: хост + бот-клиент, лог и итоги).
+## --scenario=T1..T5 [--out=<лог>] (автоматический сценарий ПР №4: хост + бот-клиент, лог и итоги),
+## --encrypt=1 (ПР №6: шифрование трафика X25519 + HKDF + AES-256-GCM; включать и на хосте, и на клиенте).
 
 const DEFAULT_PORT := 24680
 
@@ -39,6 +40,7 @@ var render_offset := Vector2.ZERO   # сглаживание коррекций 
 var results := {}                   # id -> {kills, damage, secs, died}
 var winner := GC.NO_PLAYER
 var cheat_no_rules := false
+var encryption := false              # ПР №6: шифровать трафик (X25519 + HKDF + AES-256-GCM); флаг --encrypt=1 или меню
 var predict_dash := true            # ПР №4: рывок предсказывается клиентом сразу (false — ждёт ответа сервера); F4
 var viz_mode := PredViz.GHOST       # визуализация предсказания (PredViz.*); F8
 var viz_flash_t0_ms := -1.0         # момент последней коррекции своего персонажа (красное кольцо)
@@ -81,6 +83,7 @@ func _ready() -> void:
 	ui.resume_requested.connect(func() -> void: set_pause(false))
 	ui.quit_requested.connect(func() -> void: get_tree().quit())
 	ui.net_preset_changed.connect(set_net_preset)
+	ui.encryption_changed.connect(func(on: bool) -> void: encryption = on)
 	ui.predict_changed.connect(set_predict_dash)
 	ui.viz_changed.connect(set_viz_mode)
 	ui.models_changed.connect(set_sprites)
@@ -103,6 +106,9 @@ func _ready() -> void:
 	if _args.has("preset"):
 		set_net_preset(int(_args["preset"]))
 		ui.preset_opt.select(clampi(int(_args["preset"]), 0, 2))
+	if _args.has("encrypt"):
+		encryption = String(_args["encrypt"]) != "0"
+		ui.enc_opt.select(1 if encryption else 0)
 	if _args.has("predict"):
 		predict_dash = String(_args["predict"]) != "0"
 	if _args.has("viz"):
@@ -152,6 +158,7 @@ func start_host(player_name: String, color: int, port: int, with_bot: bool) -> v
 		return
 	_apply_emulation(link)
 	net = NetNode.new(link)
+	net.encryption = encryption
 	host = GameHost.new(net, randi())
 	host.event.connect(_on_game_event)
 	host.roster_changed.connect(_refresh_lobby)
@@ -169,6 +176,7 @@ func _spawn_bot(port: int, color: int) -> void:
 	bl.connect_to("127.0.0.1", port)
 	_apply_emulation(bl)
 	var bn := NetNode.new(bl)
+	bn.encryption = encryption
 	bn.add_peer(1)
 	var bc := GameClient.new(bn, 1)
 	bc.join("Бот", color)
@@ -185,6 +193,7 @@ func start_join(player_name: String, color: int, ip: String, port: int) -> void:
 		return
 	_apply_emulation(link)
 	net = NetNode.new(link)
+	net.encryption = encryption
 	net.add_peer(1)
 	client = GameClient.new(net, 1)
 	_attach_client()
@@ -737,6 +746,16 @@ func local_chaos() -> bool:
 
 # ------------------------------------------------------------------ интерфейс и net_graph
 
+## Строка net_graph про шифрование (ПР №6): состояние сессии и счётчики отброшенных пакетов.
+func _enc_row(s: Dictionary) -> Array:
+	if bool(s.get("enc", false)):
+		var bad := int(s.get("auth_fail", 0)) + int(s.get("replay_drops", 0))
+		return ["Шифрование", "AES-256-GCM, отброшено: подделок %d / повторов %d" % [s.get("auth_fail", 0), s.get("replay_drops", 0)], _sev(bad, 1, 10)]
+	if bool(s.get("enc_pending", false)):
+		return ["Шифрование", "обмен ключами…", 1]
+	return ["Шифрование", "выкл (открытый текст)", 0]
+
+
 func _update_ui(now_ms: int) -> void:
 	if screen not in ["game", "pause", "result"]:
 		return
@@ -796,6 +815,7 @@ func _net_report() -> Dictionary:
 		rows = [
 			["#", "Соединение"],
 			["Режим / мой id", "клиент / %d" % my_id, 0],
+			_enc_row(s),
 			["Тик сервера (оценка)", "%d" % int(client.server_tick_estimate()), 0],
 			["#", "Задержка (RTT)"],
 			["Сейчас", "%.1f мс" % s["rtt_last"], _sev(s["rtt_last"], 80, 150)],
@@ -858,6 +878,7 @@ func _net_report() -> Dictionary:
 			worst_rtt = maxf(worst_rtt, s2["rtt_last"])
 			worst_loss = maxf(worst_loss, maxf(s2["ping_loss_pct"], s2["rx_loss_pct"]))
 			rows.append(["#", "Клиент %s (id %d)" % [name_of(id), id]])
+			rows.append(_enc_row(s2))
 			rows.append(["RTT / сглаж. / джиттер", "%.0f / %.0f / %.1f мс" % [s2["rtt_last"], s2["srtt"], s2["jitter"]], _sev(s2["rtt_last"], 80, 150)])
 			rows.append(["Потери пинг / входящие", "%.1f / %.1f %%" % [s2["ping_loss_pct"], s2["rx_loss_pct"]], _sev(maxf(s2["ping_loss_pct"], s2["rx_loss_pct"]), 2, 8)])
 			rows.append(["Пакеты вх / исх, КБ/с", "%d / %d, %.1f / %.1f" % [s2["pkts_in_s"], s2["pkts_out_s"], s2["bytes_in_s"] / 1024.0, s2["bytes_out_s"] / 1024.0], 0])

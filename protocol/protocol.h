@@ -58,6 +58,10 @@ enum class PacketType : std::uint8_t {
     GameEvent = 10, // сервер -> клиент, надёжный: попадание, подбор руны, смерть, начало/конец раунда
     Leave     = 11, // любая сторона, надёжный: выход из игры
     Roster    = 12, // хост -> клиенты, надёжный: список игроков лобби (id, цвет, имя)
+    // 13, 14 заняты в игре на Godot (ПР №5: WorldUpdate, WorldReliable) — C++ их не разбирает, но и не переиспользует.
+    // ---- ПР №6: шифрование. Номера 10 и 11 из текста задания заняты GameEvent/Leave, поэтому здесь 15 и 16 ----
+    KeyExchange = 15, // обе стороны, открытый ключ X25519 (32 байта) — единственный пакет handshake, не шифруется
+    Encrypted   = 16, // обе стороны: [заголовок открыт][nonce 12][шифртекст = тип внутр. пакета + его payload][tag 16]
 };
 
 // Общий заголовок пакета (8 байт "на проводе"):
@@ -311,5 +315,30 @@ struct RosterPacket {
 };
 std::vector<std::uint8_t> SerializeRoster(std::uint16_t seq, const std::vector<RosterEntry>& entries);
 std::optional<RosterPacket> ParseRoster(const std::uint8_t* data, std::size_t size);
+
+// =====================================================================================
+// ПР №6: обмен ключами и зашифрованный пакет. Заголовок остаётся ОТКРЫТЫМ (тип, sequenceNumber, requiresAck,
+// версия), потому что получатель должен прочитать их до расшифровки — поэтому ACK и повторная отправка (ПР №3)
+// работают без изменений. Подробно — docs/Security.md и crypto/secure_channel.h.
+//   KEY_EXCHANGE: payload = публичный ключ X25519, 32 байта; requiresAck = 0 (потерю лечит повтор клиента).
+//   ENCRYPTED:    payload = nonce 12 | шифртекст | tag 16; шифртекст = [тип внутреннего пакета u8][его payload];
+//                 requiresAck и sequenceNumber — те же, что у внутреннего пакета.
+// =====================================================================================
+
+constexpr std::size_t kKeyExchangePayloadSize = 32;
+constexpr std::size_t kEncryptedOverhead = 12 + 1 + 16;  // nonce + тип внутр. пакета + тег
+
+struct KeyExchangePacket {
+    std::uint16_t sequenceNumber;
+    std::uint8_t publicKey[kKeyExchangePayloadSize];
+};
+
+std::vector<std::uint8_t> SerializeKeyExchange(std::uint16_t seq, const std::uint8_t publicKey[32]);
+std::optional<KeyExchangePacket> ParseKeyExchange(const std::uint8_t* data, std::size_t size);
+
+// Заголовок пакета ENCRYPTED: payloadSize = sealedSize (nonce + шифртекст + тег). Именно эти 8 байт идут в AAD.
+std::vector<std::uint8_t> SerializeEncryptedHeader(std::uint16_t seq, bool requiresAck, std::size_t sealedSize);
+// Проверка формы: тип ENCRYPTED, payloadSize == хвост, хвост не короче kEncryptedOverhead.
+std::optional<Header> CheckEncryptedHeader(const std::uint8_t* data, std::size_t size);
 
 } // namespace telemetry

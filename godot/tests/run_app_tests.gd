@@ -55,6 +55,7 @@ func _initialize() -> void:
 	await run("два приложения: хост и клиент по UDP, матч, итоги, выход клиента", t_two_apps)
 	await run("переключатели: H (здоровье), F3 (net_graph), Esc (пауза)", t_toggles)
 	await run("настройки предсказания: F4/F8, меню и пауза синхронны, клиент получает настройку, net_graph показывает отклик", t_pred_settings)
+	await run("ПР №6: два приложения с шифрованием — меню, handshake, матч, net_graph показывает AES-256-GCM", t_encrypted_apps)
 	print("\n%d тестов, %d провалено" % [passed + failed, failed])
 	quit(1 if failed > 0 else 0)
 
@@ -91,6 +92,40 @@ func t_solo() -> void:
 	app.leave_to_menu()
 	check(app.screen == "menu" and app.mode == "" and app.host == null and app.bots.is_empty(), "возврат в меню закрывает сессию")
 	app.queue_free()
+	await process_frame
+
+
+func t_encrypted_apps() -> void:
+	var a := _new_app()
+	var b := _new_app()
+	await process_frame
+	check(a.ui.enc_opt != null and a.ui.enc_opt.item_count == 2, "в меню есть переключатель шифрования")
+	a.ui.enc_opt.select(1)
+	a.ui.enc_opt.item_selected.emit(1)
+	b.ui.enc_opt.select(1)
+	b.ui.enc_opt.item_selected.emit(1)
+	check(a.encryption and b.encryption, "переключатель включил шифрование")
+	a.start_host("Хост", 0, 24903, false)
+	b.start_join("Гость", 1, "127.0.0.1", 24903)
+	check(await _wait_until(func() -> bool: return b.my_id >= 0 and a.host.slots.size() == 2, 5.0), "клиент подключился через handshake, id=%d" % b.my_id)
+	check(b.client.roster.size() == 2 and b.client.roster[1]["name"] == "Гость", "ростер и кириллица дошли по зашифрованному каналу")
+	a.host.start_match()
+	check(await _wait_until(func() -> bool: return b.client.phase == GC.PHASE_PLAYING, 8.0), "клиент в игре")
+	_key(b, KEY_A, true)
+	await _wait(0.5)
+	_key(b, KEY_A, false)
+	check(a.host.net.stats(a.host.slots[1].peer).get("enc", false) if a.host.slots.has(1) else true, "сессия хоста с клиентом зашифрована")
+	check(b.net.stats(1).get("enc", false), "сессия клиента зашифрована")
+	check(a.net.plaintext_rejected == 0 and b.net.stats(1)["auth_fail"] == 0, "открытых пакетов и подделок нет")
+	_key(b, KEY_F3, true)
+	_key(b, KEY_F3, false)
+	await _wait(0.4)
+	var txt := JSON.stringify(b._report)
+	check(txt.contains("AES-256-GCM"), "net_graph показывает строку шифрования")
+	b.leave_to_menu()
+	a.leave_to_menu()
+	a.queue_free()
+	b.queue_free()
 	await process_frame
 
 

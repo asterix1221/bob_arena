@@ -26,3 +26,6 @@ reliable_server_app
 /icon.svg
 /icon.svg.import
 *.import
+
+# ПР №6: каталог сборки run_pr6_checks.ps1
+build_pr6/

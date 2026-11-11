@@ -23,6 +23,8 @@ const T_LEAVE := 11
 const T_ROSTER := 12
 const T_WORLD_UPDATE := 13      # ПР №5: непрерывное состояние мировых акторов (Unreliable), см. ReplCodec
 const T_WORLD_RELIABLE := 14    # ПР №5: появление/полное состояние/удаление акторов (Reliable)
+const T_KEY_EXCHANGE := 15      # ПР №6: открытый ключ X25519 (32 байта), единственный пакет handshake, не шифруется
+const T_ENCRYPTED := 16         # ПР №6: [nonce 12][шифртекст: тип внутр. пакета + payload][tag 16]; заголовок открыт (AAD)
 
 const MAX_NAME_BYTES := 16
 const MAX_INPUT_CMDS := 16
@@ -64,7 +66,8 @@ static func read_header(d: PackedByteArray) -> Dictionary:
 	var psize := r.u16()
 	var version := r.u16()
 	var ra := r.u8()
-	if type < T_PING or type > T_WORLD_RELIABLE or version != VERSION or ra > 1:
+	var known := (type >= T_PING and type <= T_WORLD_RELIABLE) or type == T_KEY_EXCHANGE or type == T_ENCRYPTED
+	if not known or version != VERSION or ra > 1:
 		return {}
 	return {"type": type, "seq": seq, "payload_size": psize, "requires_ack": ra == 1}
 
@@ -353,6 +356,39 @@ static func parse_roster(d: PackedByteArray) -> Dictionary:
 	return h.merged({"entries": entries})
 
 
+# ------------------------------------------------------------------ ПР №6: обмен ключами и зашифрованный пакет
+
+const KEY_EXCHANGE_PAYLOAD := 32
+
+
+static func key_exchange(seq: int, pub: PackedByteArray) -> PackedByteArray:
+	var b := _header(T_KEY_EXCHANGE, seq, KEY_EXCHANGE_PAYLOAD, false)
+	b.append_array(pub.slice(0, KEY_EXCHANGE_PAYLOAD))
+	return b
+
+
+static func parse_key_exchange(d: PackedByteArray) -> Dictionary:
+	var h := _check(d, T_KEY_EXCHANGE, false)
+	if h.is_empty() or h["payload_size"] != KEY_EXCHANGE_PAYLOAD:
+		return {}
+	return h.merged({"pub": d.slice(HEADER_SIZE)})
+
+
+## Заголовок ENCRYPTED: payload_size = размер «nonce + шифртекст + tag». Именно эти 8 байт идут в AAD.
+static func encrypted_header(seq: int, requires_ack: bool, sealed_size: int) -> PackedByteArray:
+	return _header(T_ENCRYPTED, seq, sealed_size, requires_ack)
+
+
+## Форма ENCRYPTED: payload_size == хвост, хвост не короче nonce + тип + tag (29 байт). {} если нет.
+static func check_encrypted(d: PackedByteArray) -> Dictionary:
+	var h := read_header(d)
+	if h.is_empty() or h["type"] != T_ENCRYPTED:
+		return {}
+	if d.size() != HEADER_SIZE + int(h["payload_size"]) or int(h["payload_size"]) < 12 + 1 + 16:
+		return {}
+	return h
+
+
 ## Разбор по типу: {} при любой ошибке. Для Movement/Shoot — минимальный разбор (поля как в C++).
 static func parse(d: PackedByteArray) -> Dictionary:
 	var h := read_header(d)
@@ -371,4 +407,6 @@ static func parse(d: PackedByteArray) -> Dictionary:
 		T_ROSTER: return parse_roster(d)
 		T_WORLD_UPDATE: return ReplCodec.parse_update(d)
 		T_WORLD_RELIABLE: return ReplCodec.parse_reliable(d)
+		T_KEY_EXCHANGE: return parse_key_exchange(d)
+		T_ENCRYPTED: return check_encrypted(d)
 		_: return h # Movement/Shoot: игре не нужны, достаточно валидного заголовка
